@@ -34,6 +34,55 @@ document.getElementById('btn-load-presets').addEventListener('click', () => {
   for (const p of SHEET_PRESETS) addStockRow(stockBody, p);
 });
 
+// --- Scan Label ---
+const scanFile = document.getElementById('scan-file');
+const scanPreview = document.getElementById('scan-preview');
+const scanImageEl = document.getElementById('scan-image');
+const scanStatus = document.getElementById('scan-status');
+
+document.getElementById('btn-scan-label').addEventListener('click', () => {
+  scanFile.click();
+});
+
+scanFile.addEventListener('change', async () => {
+  const file = scanFile.files[0];
+  if (!file) return;
+
+  // Show preview
+  scanPreview.hidden = false;
+  scanImageEl.src = URL.createObjectURL(file);
+  scanStatus.textContent = 'Scanning...';
+  scanStatus.className = 'scanning';
+
+  try {
+    const { scanImage } = await import('./scanner.js');
+    const result = await scanImage(file);
+
+    if (!result.thickness && !result.width && !result.length && !result.price) {
+      scanStatus.textContent = "Couldn't read label — try a clearer photo";
+      scanStatus.className = 'error';
+    } else {
+      scanStatus.textContent = 'Done! Review the row below.';
+      scanStatus.className = 'success';
+      addStockRow(stockBody, {
+        name: result.name || '',
+        type: result.type || 'dimensional',
+        length: result.length || '',
+        width: result.width || '',
+        thickness: result.thickness || '',
+        price: result.price || '',
+        quantity: null,
+      });
+    }
+  } catch (e) {
+    scanStatus.textContent = 'Scanner unavailable';
+    scanStatus.className = 'error';
+    console.error('Scan error:', e);
+  }
+
+  scanFile.value = '';
+});
+
 // --- Project save/load ---
 const projectSelect = document.getElementById('project-select');
 const projectName = document.getElementById('project-name');

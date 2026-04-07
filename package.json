@@ -5,5 +5,9 @@
   "type": "module",
   "scripts": {
     "test": "node --test tests/"
+  },
+  "dependencies": {
+    "glpk.js": "^5.0.0",
+    "javascript-lp-solver": "^1.0.3"
   }
 }

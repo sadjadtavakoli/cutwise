@@ -122,4 +122,70 @@ const constraints = createConstraints();
   assert.equal(result.unassigned.length, 1);
 }
 
-console.log('test-greedy: all passed');
+// === Glue-up tests ===
+
+// Test 11: Piece wider than any stock, glue-up from narrower boards
+{
+  const pieces = [createNeededPiece({ name: 'Tabletop', length: 36, width: 12, thickness: 0.75, canGlueWidth: true })];
+  const stock = [createStockItem({ name: '1x6', type: 'dimensional', length: 48, width: 5.5, thickness: 0.75, price: 7.00 })];
+
+  const result = greedySolve(pieces, stock, constraints, 'cheapest');
+  // Need 12" + 0.5" overage = 12.5" width. Each strip is 5.5".
+  // 2 strips: 5.5 + 5.5 - 0.125 (one kerf) = 10.875 — not enough
+  // 3 strips: 5.5*3 - 0.125*2 = 16.25 — enough
+  assert.equal(result.assignments.length, 1);
+  assert.ok(result.assignments[0].glueUp !== null);
+  assert.equal(result.assignments[0].glueUp.stripCount, 3);
+  assert.equal(result.totalCost, 21.00); // 3 boards × $7
+}
+
+// Test 12: canGlueWidth=false prevents glue-up
+{
+  const pieces = [createNeededPiece({ name: 'No glue', length: 36, width: 12, thickness: 0.75, canGlueWidth: false })];
+  const stock = [createStockItem({ name: '1x6', type: 'dimensional', length: 48, width: 5.5, thickness: 0.75, price: 7.00 })];
+
+  const result = greedySolve(pieces, stock, constraints, 'cheapest');
+  assert.equal(result.assignments.length, 0);
+  assert.equal(result.unassigned.length, 1);
+}
+
+// Test 13: Glue-up respects maxGlueJoints
+{
+  const tightConstraints = createConstraints({ maxGlueJoints: 1 });
+  const pieces = [createNeededPiece({ name: 'Wide', length: 36, width: 12, thickness: 0.75, canGlueWidth: true })];
+  // Max 1 joint = 2 strips. 2 × 5.5 - 0.125 = 10.875 < 12.5 needed — can't do it
+  const stock = [createStockItem({ name: '1x6', type: 'dimensional', length: 48, width: 5.5, thickness: 0.75, price: 7.00 })];
+
+  const result = greedySolve(pieces, stock, tightConstraints, 'cheapest');
+  assert.equal(result.assignments.length, 0);
+  assert.equal(result.unassigned.length, 1);
+}
+
+// Test 14: Glue-up respects minGlueStripWidth
+{
+  const pieces = [createNeededPiece({ name: 'Panel', length: 24, width: 7, thickness: 0.75, canGlueWidth: true })];
+  // 7 + 0.5 overage = 7.5" needed. Stock is 5.5" wide.
+  // 2 strips: 5.5 + 5.5 - 0.125 = 10.875 usable. Enough, and narrowest strip is still full width.
+  const stock = [createStockItem({ name: '1x6', type: 'dimensional', length: 48, width: 5.5, thickness: 0.75, price: 7.00 })];
+
+  const result = greedySolve(pieces, stock, constraints, 'cheapest');
+  assert.equal(result.assignments.length, 1);
+  assert.ok(result.assignments[0].glueUp !== null);
+}
+
+// Test 15: Glue-up prefers buying one wide board over multiple narrow if cheaper
+{
+  const pieces = [createNeededPiece({ name: 'Shelf', length: 36, width: 10, thickness: 0.75, canGlueWidth: true })];
+  const stock = [
+    createStockItem({ name: '1x12', type: 'dimensional', length: 48, width: 11.25, thickness: 0.75, price: 14.00 }),
+    createStockItem({ name: '1x6', type: 'dimensional', length: 48, width: 5.5, thickness: 0.75, price: 7.00 }),
+  ];
+
+  const result = greedySolve(pieces, stock, constraints, 'cheapest');
+  // Direct fit in 1x12: $14. Glue-up from 2× 1x6: $14.
+  // Same cost — prefer direct fit (fewer cuts)
+  assert.equal(result.purchases[0].stock.name, '1x12');
+  assert.equal(result.totalCost, 14.00);
+}
+
+console.log('test-greedy (with glue-up): all passed');

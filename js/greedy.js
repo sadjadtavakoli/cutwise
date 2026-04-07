@@ -42,6 +42,54 @@ function tryFitOrientations(piece, stockWidth, remainingLength, overageMargin, k
   return { fits: false, rotated: false };
 }
 
+function findGlueUp(piece, sortedStock, constraints, stockUsageCount) {
+  if (!piece.canGlueWidth) return null;
+
+  const { kerfWidth, overageMargin, minGlueStripWidth, maxGlueJoints } = constraints;
+  const neededWidth = piece.width + overageMargin;
+  const neededLength = piece.length + overageMargin;
+
+  let best = null;
+
+  for (let i = 0; i < sortedStock.length; i++) {
+    const stockItem = sortedStock[i];
+
+    // Must match thickness
+    if (Math.abs(piece.thickness - stockItem.thickness) > 0.01) continue;
+
+    // Strip must be long enough
+    if (stockItem.length < neededLength) continue;
+
+    // Strip must meet minimum width
+    if (stockItem.width < minGlueStripWidth) continue;
+
+    // Calculate strips needed: n strips joined with (n-1) kerfs must cover neededWidth
+    // n * stripWidth - (n-1) * kerfWidth >= neededWidth
+    // n * (stripWidth - kerfWidth) >= neededWidth - kerfWidth
+    // n >= (neededWidth - kerfWidth) / (stripWidth - kerfWidth)
+    const stripWidth = stockItem.width;
+    const n = Math.ceil((neededWidth - kerfWidth) / (stripWidth - kerfWidth));
+
+    // Must need more than 1 strip (otherwise it's a direct fit)
+    if (n <= 1) continue;
+
+    // Check joint limit
+    if (n - 1 > maxGlueJoints) continue;
+
+    // Check available quantity
+    const usedCount = stockUsageCount.get(i) || 0;
+    const available = stockItem.quantity === null ? Infinity : stockItem.quantity - usedCount;
+    if (available < n) continue;
+
+    const cost = stockCost(stockItem) * n;
+    if (best === null || cost < best.cost) {
+      best = { candidate: stockItem, candidateIndex: i, stripCount: n, cost, neededLength };
+    }
+  }
+
+  return best;
+}
+
 export function greedySolve(neededPieces, availableStock, constraints, strategy) {
   const { kerfWidth, overageMargin } = constraints;
 
@@ -100,6 +148,23 @@ export function greedySolve(neededPieces, availableStock, constraints, strategy)
         assignments.push({ neededPiece: piece, sourceStock: stockItem, rotated, glueUp: null });
         assigned = true;
         break;
+      }
+    }
+
+    if (!assigned) {
+      // Try glue-up as fallback
+      const glueUp = findGlueUp(piece, sortedStock, constraints, stockUsageCount);
+      if (glueUp !== null) {
+        // Check if direct fit already found a cost to compare against
+        // (In this path, direct fit already failed, so glue-up is the only option)
+        const { candidate, candidateIndex, stripCount } = glueUp;
+        const usedCount = stockUsageCount.get(candidateIndex) || 0;
+        stockUsageCount.set(candidateIndex, usedCount + stripCount);
+        for (let k = 0; k < stripCount; k++) {
+          purchasedBoards.push({ stock: candidate, remainingLength: 0, stockIndex: candidateIndex });
+        }
+        assignments.push({ neededPiece: piece, sourceStock: candidate, rotated: false, glueUp: { stripCount, stockUsed: candidate } });
+        assigned = true;
       }
     }
 

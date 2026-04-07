@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CutWise — Lumber Cut Optimizer</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header>
+    <h1>CutWise</h1>
+    <p class="subtitle">Optimize lumber purchases by price</p>
+  </header>
+
+  <main>
+    <!-- Project management -->
+    <section id="project-bar">
+      <label for="project-select">Project:</label>
+      <select id="project-select"><option value="">— New project —</option></select>
+      <input type="text" id="project-name" placeholder="Project name">
+      <button id="btn-save-project">Save</button>
+      <button id="btn-delete-project">Delete</button>
+    </section>
+
+    <!-- Needed Pieces -->
+    <section id="needed-pieces-section">
+      <h2>Needed Pieces</h2>
+      <table id="needed-pieces-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Length (in)</th>
+            <th>Width (in)</th>
+            <th>Thickness (in)</th>
+            <th>Qty</th>
+            <th>Can Glue?</th>
+            <th>Grain?</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="needed-pieces-body"></tbody>
+      </table>
+      <button id="btn-add-piece">+ Add Piece</button>
+      <button id="btn-paste-pieces">Paste from Spreadsheet</button>
+    </section>
+
+    <!-- Available Stock -->
+    <section id="stock-section">
+      <h2>Available Stock</h2>
+      <div id="stock-bar">
+        <label for="stock-select">Stock list:</label>
+        <select id="stock-select"><option value="">— New list —</option></select>
+        <input type="text" id="stock-name" placeholder="Stock list name">
+        <button id="btn-save-stock">Save</button>
+        <button id="btn-delete-stock">Delete</button>
+        <button id="btn-load-presets">Load Presets</button>
+      </div>
+      <table id="stock-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Length (in)</th>
+            <th>Width (in)</th>
+            <th>Thickness (in)</th>
+            <th>Price ($)</th>
+            <th>Qty</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="stock-body"></tbody>
+      </table>
+      <button id="btn-add-stock">+ Add Stock</button>
+    </section>
+
+    <!-- Settings -->
+    <section id="settings-section">
+      <details>
+        <summary><h2>Settings</h2></summary>
+        <div class="settings-grid">
+          <label for="kerf-width">Kerf width (in):</label>
+          <input type="number" id="kerf-width" value="0.125" step="0.001" min="0">
+
+          <label for="min-glue-strip">Min glue strip width (in):</label>
+          <input type="number" id="min-glue-strip" value="2" step="0.25" min="0">
+
+          <label for="max-glue-joints">Max glue joints:</label>
+          <input type="number" id="max-glue-joints" value="4" step="1" min="1">
+
+          <label for="overage-margin">Overage margin (in):</label>
+          <input type="number" id="overage-margin" value="0.5" step="0.125" min="0">
+        </div>
+      </details>
+    </section>
+
+    <!-- Optimize button -->
+    <section id="optimize-section">
+      <button id="btn-optimize">Optimize</button>
+    </section>
+
+    <!-- Results -->
+    <section id="results-section" hidden>
+      <h2>Results</h2>
+      <div id="results-container"></div>
+    </section>
+
+    <!-- Import/Export -->
+    <section id="io-section">
+      <button id="btn-export">Export All Data</button>
+      <button id="btn-import">Import Data</button>
+      <input type="file" id="import-file" accept=".json" hidden>
+    </section>
+  </main>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

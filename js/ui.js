@@ -79,11 +79,15 @@ export function readStockFromTable(tbody) {
 }
 
 export function readConstraints() {
+  const kerf = parseFloat(document.getElementById('kerf-width').value);
+  const minGlue = parseFloat(document.getElementById('min-glue-strip').value);
+  const maxJoints = parseInt(document.getElementById('max-glue-joints').value);
+  const overage = parseFloat(document.getElementById('overage-margin').value);
   return {
-    kerfWidth: parseFloat(document.getElementById('kerf-width').value) || 0.125,
-    minGlueStripWidth: parseFloat(document.getElementById('min-glue-strip').value) || 2,
-    maxGlueJoints: parseInt(document.getElementById('max-glue-joints').value) || 4,
-    overageMargin: parseFloat(document.getElementById('overage-margin').value) || 0.5,
+    kerfWidth: isNaN(kerf) ? 0.125 : kerf,
+    minGlueStripWidth: isNaN(minGlue) ? 2 : minGlue,
+    maxGlueJoints: isNaN(maxJoints) ? 4 : maxJoints,
+    overageMargin: isNaN(overage) ? 0.5 : overage,
   };
 }
 

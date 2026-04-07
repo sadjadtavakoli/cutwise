@@ -160,8 +160,11 @@ export function greedySolve(neededPieces, availableStock, constraints, strategy)
         const { candidate, candidateIndex, stripCount } = glueUp;
         const usedCount = stockUsageCount.get(candidateIndex) || 0;
         stockUsageCount.set(candidateIndex, usedCount + stripCount);
+        // Each glue-up strip uses piece.length + overage + kerf from the board.
+        // The rest of the board's length is still available for other pieces.
+        const stripUsedLength = piece.length + overageMargin + kerfWidth;
         for (let k = 0; k < stripCount; k++) {
-          purchasedBoards.push({ stock: candidate, remainingLength: 0, stockIndex: candidateIndex });
+          purchasedBoards.push({ stock: candidate, remainingLength: candidate.length - stripUsedLength, stockIndex: candidateIndex });
         }
         assignments.push({ neededPiece: piece, sourceStock: candidate, rotated: false, glueUp: { stripCount, stockUsed: candidate } });
         assigned = true;

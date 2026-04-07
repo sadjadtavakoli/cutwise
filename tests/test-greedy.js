@@ -214,4 +214,24 @@ const constraints = createConstraints();
   assert.equal(result.totalCost, 45.00);
 }
 
-console.log('test-greedy (with sheet goods): all passed');
+// Test 18: Glue-up boards have leftover length reused for smaller pieces
+{
+  // Base needs glue-up: 30" long × 12" wide from 8ft 1x6 (5.5" wide)
+  // That buys 3 boards of 96" length, each uses 30 + 0.5 + 0.125 = 30.625"
+  // Remaining per board: 96 - 30.625 = 65.375"
+  // Legs are 24" × 3" — should fit in leftover from glue-up boards, not buy new ones
+  const pieces = [
+    createNeededPiece({ name: 'Base', length: 30, width: 12, thickness: 0.75, canGlueWidth: true }),
+    createNeededPiece({ name: 'Leg', length: 24, width: 3, thickness: 0.75, quantity: 4 }),
+  ];
+  const stock = [createStockItem({ name: '1x6 8ft', type: 'dimensional', length: 96, width: 5.5, thickness: 0.75, price: 8.00 })];
+
+  const result = greedySolve(pieces, stock, constraints, 'cheapest');
+  // Base glue-up: 3 boards. Legs reuse leftover from those 3 boards (4 legs fit easily).
+  // Total: 3 boards, not 3 + 4 = 7
+  assert.equal(result.assignments.length, 5); // 1 base + 4 legs
+  assert.equal(result.purchases[0].quantity, 3); // only 3 boards purchased
+  assert.equal(result.totalCost, 24.00); // 3 × $8
+}
+
+console.log('test-greedy (all tests): all passed');

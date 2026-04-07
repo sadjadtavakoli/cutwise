@@ -188,4 +188,30 @@ const constraints = createConstraints();
   assert.equal(result.totalCost, 14.00);
 }
 
-console.log('test-greedy (with glue-up): all passed');
+// === Sheet goods tests ===
+
+// Test 16: Single piece from a sheet
+{
+  const pieces = [createNeededPiece({ name: 'Panel A', length: 24, width: 24, thickness: 0.75, canGlueWidth: false })];
+  const stock = [createStockItem({ name: 'Plywood 4x8', type: 'sheet', length: 96, width: 48, thickness: 0.75, price: 45.00 })];
+
+  const result = greedySolve(pieces, stock, constraints, 'cheapest');
+  assert.equal(result.assignments.length, 1);
+  assert.equal(result.totalCost, 45.00);
+}
+
+// Test 17: Multiple pieces from one sheet
+{
+  const pieces = [
+    createNeededPiece({ name: 'Side L', length: 30, width: 12, thickness: 0.75, quantity: 2 }),
+    createNeededPiece({ name: 'Top', length: 24, width: 12, thickness: 0.75 }),
+  ];
+  const stock = [createStockItem({ name: 'Plywood', type: 'sheet', length: 96, width: 48, thickness: 0.75, price: 45.00 })];
+
+  const result = greedySolve(pieces, stock, constraints, 'cheapest');
+  assert.equal(result.assignments.length, 3);
+  assert.equal(result.purchases[0].quantity, 1);
+  assert.equal(result.totalCost, 45.00);
+}
+
+console.log('test-greedy (with sheet goods): all passed');

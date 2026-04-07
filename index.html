@@ -71,6 +71,12 @@
         <tbody id="stock-body"></tbody>
       </table>
       <button id="btn-add-stock">+ Add Stock</button>
+      <button id="btn-scan-label">Scan Label</button>
+      <input type="file" id="scan-file" accept="image/*" capture="environment" hidden>
+      <div id="scan-preview" hidden>
+        <img id="scan-image" alt="Label preview">
+        <span id="scan-status">Scanning...</span>
+      </div>
     </section>
 
     <!-- Settings -->
@@ -112,6 +118,7 @@
     </section>
   </main>
 
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <script type="module" src="js/app.js"></script>
 </body>
 </html>

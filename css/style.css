@@ -223,6 +223,61 @@ details[open] summary h2::after {
   padding-top: 1rem;
 }
 
+/* Scanner */
+#btn-scan-label {
+  background: #40c057;
+  color: white;
+  border-color: #37b24d;
+}
+
+#btn-scan-label:hover {
+  background: #37b24d;
+}
+
+#scan-preview {
+  margin-top: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+#scan-image {
+  max-width: 120px;
+  max-height: 80px;
+  border-radius: 4px;
+  border: 1px solid #dee2e6;
+}
+
+#scan-status {
+  font-size: 0.875rem;
+  color: #6c757d;
+}
+
+#scan-status.error {
+  color: #dc3545;
+}
+
+#scan-status.success {
+  color: #40c057;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+#scan-status.scanning::before {
+  content: '';
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #6c757d;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-right: 0.5rem;
+  vertical-align: middle;
+}
+
 @media (max-width: 640px) {
   body { padding: 0.5rem; }
   table { font-size: 0.75rem; }

@@ -357,8 +357,101 @@ details[open] summary h2::after {
   font-size: 0.875rem;
 }
 
+/* Cut diagrams */
+.diagram-container {
+  margin: 0.75rem 0;
+}
+
+.board-diagram {
+  margin-bottom: 1rem;
+}
+
+.board-diagram-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+  color: #495057;
+}
+
+.board-svg-wrapper {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.board-svg {
+  display: block;
+}
+
+.board-svg .board-outline {
+  fill: #f1f3f5;
+  stroke: #adb5bd;
+  stroke-width: 1;
+}
+
+.board-svg .piece-rect {
+  stroke: #fff;
+  stroke-width: 1.5;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.board-svg .piece-rect:hover,
+.board-svg .piece-rect.highlighted {
+  stroke: #212529;
+  stroke-width: 2.5;
+  opacity: 0.85;
+}
+
+.board-svg .piece-label {
+  font-size: 11px;
+  fill: #212529;
+  pointer-events: none;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.board-svg .piece-dim {
+  font-size: 9px;
+  fill: #495057;
+  pointer-events: none;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.board-svg .waste-area {
+  fill: url(#waste-hatch);
+}
+
+.diagram-tooltip {
+  position: absolute;
+  background: #212529;
+  color: white;
+  padding: 0.4rem 0.6rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  pointer-events: none;
+  z-index: 100;
+  white-space: nowrap;
+  max-width: 250px;
+}
+
+.diagram-tooltip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: #212529;
+}
+
+.result-list li.assign-highlighted {
+  background: #fff3bf;
+  border-radius: 3px;
+}
+
 @media (max-width: 640px) {
   body { padding: 0.5rem; }
   table { font-size: 0.75rem; }
   th, td { padding: 0.25rem; }
+  .board-svg .piece-label { font-size: 9px; }
+  .board-svg .piece-dim { font-size: 7px; }
 }

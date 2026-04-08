@@ -582,7 +582,7 @@ function generateAllPatterns(expandedPieces, availableStock, constraints) {
       // Pack sections into rows
       let rows = packSectionsIntoRows(
         selectedDemands.flatMap(d => d.sections.map(s => ({ ...s, demandPieceId: d.piece._id }))),
-        boardLen, boardW
+        boardLen, boardW, kerfWidth
       );
       if (!rows) continue;
 
@@ -595,7 +595,7 @@ function generateAllPatterns(expandedPieces, availableStock, constraints) {
           ...selectedDemands.flatMap(d => d.sections.map(s => ({ ...s, demandPieceId: d.piece._id }))),
           ...candidateSections,
         ];
-        const newRows = packSectionsIntoRows(allSections, boardLen, boardW);
+        const newRows = packSectionsIntoRows(allSections, boardLen, boardW, kerfWidth);
         if (newRows) {
           selectedDemands.push(candidate);
           usedPieceIds.add(candidate.piece._id);
@@ -627,7 +627,7 @@ function generateAllPatterns(expandedPieces, availableStock, constraints) {
           ...selectedDemands.flatMap(d => d.sections.map(s => ({ ...s, demandPieceId: d.piece._id }))),
           ...candidate.sections.map(s => ({ ...s, demandPieceId: candidate.piece._id })),
         ];
-        const newRows = packSectionsIntoRows(allSections, boardLen, boardW);
+        const newRows = packSectionsIntoRows(allSections, boardLen, boardW, kerfWidth);
         if (newRows) {
           selectedDemands.push(candidate);
           usedPieceIds.add(candidate.piece._id);
@@ -668,7 +668,7 @@ function generateAllPatterns(expandedPieces, availableStock, constraints) {
           ...selected.flatMap(sd => sd.sections.map(s => ({ ...s, demandPieceId: sd.piece._id }))),
           ...d.sections.map(s => ({ ...s, demandPieceId: d.piece._id })),
         ];
-        const newRows = packSectionsIntoRows(allSections, boardLen, boardW);
+        const newRows = packSectionsIntoRows(allSections, boardLen, boardW, kerfWidth);
         if (newRows) {
           selected.push(d);
           usedIds.add(d.piece._id);
@@ -713,7 +713,7 @@ function generateAllPatterns(expandedPieces, availableStock, constraints) {
  * Different-height rows stack along the board length.
  * Returns rows array if feasible, null if not.
  */
-function packSectionsIntoRows(sections, boardLength, boardWidth) {
+function packSectionsIntoRows(sections, boardLength, boardWidth, kerfWidth = 0) {
   // Group by height (length of section = row height)
   const byHeight = new Map();
   for (const sec of sections) {
@@ -737,8 +737,8 @@ function packSectionsIntoRows(sections, boardLength, boardWidth) {
     for (const sec of sorted) {
       let placed = false;
       for (let r = 0; r < rowWidths.length; r++) {
-        if (rowWidths[r] + sec.width + (rowWidths[r] > 0 ? 0.125 : 0) <= boardWidth + 0.001) {
-          rowWidths[r] += sec.width + (rowWidths[r] > 0 ? 0.125 : 0);
+        if (rowWidths[r] + sec.width + (rowWidths[r] > 0 ? kerfWidth : 0) <= boardWidth + 0.001) {
+          rowWidths[r] += sec.width + (rowWidths[r] > 0 ? kerfWidth : 0);
           placed = true;
           break;
         }
@@ -780,7 +780,14 @@ function solvePatternILP(expandedPieces, allPatterns) {
   for (let i = 0; i < allPatterns.length; i++) {
     const pattern = allPatterns[i];
     const varName = `pat_${i}`;
-    const variable = { cost: pattern.cost };
+    // Add a tiny waste penalty (fraction of a cent) so the ILP prefers
+    // fuller boards when dollar cost is tied. Penalty = proportion of
+    // board area that is wasted × 0.001 (never changes the cheapest option).
+    const boardArea = pattern.stock.length * pattern.stock.width;
+    const usedArea = pattern.demands.reduce((sum, d) =>
+      sum + d.sections.reduce((s, sec) => s + sec.width * sec.length, 0), 0);
+    const wastePenalty = boardArea > 0 ? ((boardArea - usedArea) / boardArea) * 0.001 : 0;
+    const variable = { cost: pattern.cost + wastePenalty };
     for (const pieceId of pattern.pieceIds) {
       variable[`piece_${pieceId}`] = 1;
     }

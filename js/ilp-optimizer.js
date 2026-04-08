@@ -2,364 +2,306 @@ import solver from 'javascript-lp-solver';
 import { stockCost } from './cost.js';
 
 /**
- * CutWise ILP Optimizer — Clean rewrite
+ * CutWise Optimizer — Cutting Stock ILP formulation
  *
- * Phase 1: Decompose pieces into rectangular ITEMS (direct pieces or glue-up strips)
- * Phase 2: Pack items onto boards (2D bin packing with guillotine cuts)
- * Phase 3: ILP selects minimum-cost board patterns covering all items
+ * Uses ITEM TYPES (not individual items) to keep the ILP small.
+ * A "stand" type has demand=16, not 16 separate variables.
+ * This makes the ILP solvable with simple solvers.
  *
- * Board cutting model:
- * - Mode A "rip-only": board ripped into columns, items crosscut within columns
- * - Mode B "crosscut-then-rip": wide items crosscut first (full board width),
- *   then remaining area ripped into columns for narrower items
+ * Phase 1: Decompose pieces into item types (direct or glue-up strips)
+ * Phase 2: Generate patterns (how many of each type a board provides)
+ * Phase 3: Small ILP selects minimum-cost patterns
  */
 
+function expandPieces(pieces) {
+  const expanded = [];
+  for (const p of pieces) {
+    for (let i = 0; i < p.quantity; i++) {
+      expanded.push({ ...p, quantity: 1, _id: expanded.length });
+    }
+  }
+  return expanded;
+}
+
 // ──────────────────────────────────────────────
-// PHASE 1: Expand pieces → rectangular items
+// PHASE 1: Create item types
 // ──────────────────────────────────────────────
 
-function createItems(pieces, availableStock, constraints) {
+function createItemTypes(pieces, availableStock, constraints) {
   const { overageMargin, kerfWidth, minGlueStripWidth, maxGlueJoints } = constraints;
-  const items = [];
-  let nextId = 0;
+  const types = []; // { name, width, length, demand, isDirect, piece (template) }
 
-  // Max stock width per thickness (for determining glue-up feasibility)
   const maxWidthByThickness = new Map();
   for (const s of availableStock) {
     const cur = maxWidthByThickness.get(s.thickness) || 0;
     if (s.width > cur) maxWidthByThickness.set(s.thickness, s.width);
   }
 
+  // Group expanded pieces by (name, width, length, thickness) → same type
+  const typeMap = new Map();
   for (const piece of pieces) {
     const pw = piece.width + overageMargin;
     const pl = piece.length + overageMargin + kerfWidth;
     const maxW = maxWidthByThickness.get(piece.thickness) || 0;
 
     if (pw <= maxW + 0.001) {
-      // Direct fit: single rectangular item
-      items.push({
-        _id: nextId++, width: pw, length: pl,
-        piece, isDirect: true, isStrip: false,
-        stripNum: 0, totalStrips: 0,
-      });
-    } else if (piece.canGlueWidth && maxW >= minGlueStripWidth) {
-      // Glue-up: decompose into N strip items
+      // Direct fit
+      const key = `direct:${piece.name}:${pw}:${pl}:${piece.thickness}`;
+      if (typeMap.has(key)) {
+        typeMap.get(key).demand += piece.quantity;
+      } else {
+        typeMap.set(key, {
+          name: piece.name, width: pw, length: pl,
+          demand: piece.quantity, isDirect: true, isStrip: false,
+          piece, thickness: piece.thickness, stripCount: 0,
+        });
+      }
+    }
+
+    if (piece.canGlueWidth && pw > maxW && maxW >= minGlueStripWidth) {
+      // Glue-up strips
       const n = Math.ceil(pw / maxW);
-      if (n - 1 <= maxGlueJoints) {
-        const stripW = Math.ceil((pw / n) * 100) / 100; // minimum strip width
-        for (let i = 0; i < n; i++) {
-          items.push({
-            _id: nextId++, width: stripW, length: pl,
-            piece, isDirect: false, isStrip: true,
-            stripNum: i + 1, totalStrips: n,
+      if (n > 1 && n - 1 <= maxGlueJoints) {
+        const stripW = Math.ceil((pw / n) * 100) / 100;
+        const key = `strip:${piece.name}:${stripW}:${pl}:${piece.thickness}`;
+        if (typeMap.has(key)) {
+          typeMap.get(key).demand += piece.quantity * n;
+        } else {
+          typeMap.set(key, {
+            name: piece.name + '_strip', width: stripW, length: pl,
+            demand: piece.quantity * n, isDirect: false, isStrip: true,
+            piece, thickness: piece.thickness, stripCount: n,
           });
         }
       }
     }
-    // else: piece can't be made — will show as unassigned
   }
 
-  return items;
+  return [...typeMap.values()];
 }
 
 // ──────────────────────────────────────────────
-// PHASE 2: Generate board patterns
+// PHASE 2: Generate patterns
 // ──────────────────────────────────────────────
 
 /**
- * Pack items into columns on a board. Columns run the full available length.
- * Items are assigned to columns where item.width ≤ column width.
- * `sortFn` controls the packing order (different orders give different patterns).
+ * A pattern describes what one board produces: { typeIndex → count }
+ * Pattern generation tries to maximize items per board.
  */
-function packIntoColumns(columns, items, usedIds, sortFn) {
-  const placements = [];
-  const sorted = [...items].sort(sortFn);
-
-  for (const item of sorted) {
-    if (usedIds.has(item._id)) continue;
-    // Find the BEST column: prefer the one with least width waste (closest match).
-    // This ensures 8" items go to 8" columns, not 11.5" columns,
-    // and 2.5" items don't steal space in 8" columns.
-    let bestCol = null;
-    let bestWaste = Infinity;
-    for (const col of columns) {
-      if (col.width >= item.width - 0.001 && col.remaining >= item.length - 0.001) {
-        const waste = col.width - item.width;
-        if (waste < bestWaste) {
-          bestWaste = waste;
-          bestCol = col;
-        }
-      }
-    }
-    if (bestCol) {
-      bestCol.remaining -= item.length;
-      placements.push(item);
-      usedIds.add(item._id);
-    }
-  }
-  return placements;
-}
-
-// Sorting strategies for diverse pattern generation
-const SORT_STRATEGIES = [
-  (a, b) => b.width - a.width || b.length - a.length,   // widest first
-  (a, b) => a.width - b.width || b.length - a.length,   // narrowest first
-  (a, b) => (b.length * b.width) - (a.length * a.width), // largest area first
-  (a, b) => b.length - a.length || b.width - a.width,    // longest first
-];
-
-/**
- * Try packing with all sort strategies, calling addPattern for each result.
- */
-function packAllStrategies(makeColumns, items, usedIdsSeed, addPattern, preItems) {
-  for (const sortFn of SORT_STRATEGIES) {
-    const columns = makeColumns();
-    const usedIds = new Set(usedIdsSeed);
-    const placed = packIntoColumns(columns, items, usedIds, sortFn);
-    if (placed.length > 0) {
-      addPattern(preItems ? [...preItems, ...placed] : placed);
-    }
-  }
-}
-
-function generatePatterns(stockItem, items, constraints) {
-  const { kerfWidth, overageMargin } = constraints;
+function generatePatterns(stockItem, itemTypes, constraints) {
+  const { kerfWidth } = constraints;
   const boardW = stockItem.width;
   const boardL = stockItem.length;
   const patterns = [];
-  const MAX_PATTERNS = 3000;
   const seenKeys = new Set();
+  const MAX_PATTERNS = 200;
 
-  // Filter items compatible with this stock (thickness match)
-  const compatible = items.filter(i =>
-    Math.abs(i.piece.thickness - stockItem.thickness) <= 0.01 &&
-    i.width <= boardW + 0.001 &&
-    i.length <= boardL + 0.001
-  );
+  // Filter compatible types
+  const compatible = itemTypes
+    .map((t, idx) => ({ ...t, typeIdx: idx }))
+    .filter(t => t.thickness === stockItem.thickness &&
+                 t.width <= boardW + 0.001 &&
+                 t.length <= boardL + 0.001);
+
   if (compatible.length === 0) return patterns;
 
-  // Collect useful column widths from item widths
-  const widthSet = new Set();
-  widthSet.add(boardW); // full width
-  for (const item of compatible) {
-    widthSet.add(item.width);
-  }
+  // Column widths to try
+  const widthSet = new Set([boardW]);
+  for (const t of compatible) widthSet.add(t.width);
   const colWidths = [...widthSet].sort((a, b) => a - b);
 
-  function addPattern(placements) {
-    if (placements.length === 0) return;
-    const ids = placements.map(p => p._id);
-    const key = ids.sort().join(',');
+  function addPattern(typeCounts) {
+    // typeCounts: Map<typeIdx, count>
+    const entries = [...typeCounts.entries()].filter(([, c]) => c > 0);
+    if (entries.length === 0) return;
+    const key = entries.map(([ti, c]) => `${ti}:${c}`).sort().join('|');
     if (seenKeys.has(key)) return;
     seenKeys.add(key);
-
-    // Build sections for diagram
-    const demands = placements.map(item => ({
-      piece: item.piece,
-      type: item.isStrip ? 'glueup' : 'direct',
-      rotated: false,
-      stripCount: item.totalStrips,
-      sections: [{ width: item.width, length: item.length }],
-    }));
-
-    patterns.push({
-      stock: stockItem,
-      demands,
-      pieceIds: new Set(ids),
-      cost: stockCost(stockItem),
-    });
+    patterns.push({ stock: stockItem, typeCounts: new Map(entries), cost: stockCost(stockItem) });
   }
 
-  // ── MODE A: Rip-only ──
+  /**
+   * Pack items into columns, respecting type demands as upper bound.
+   * Returns Map<typeIdx, count> of items packed.
+   */
+  function packColumns(columns, types, sortFn) {
+    const sorted = [...types].sort(sortFn);
+    const counts = new Map();
+
+    for (const t of sorted) {
+      const currentCount = counts.get(t.typeIdx) || 0;
+      if (currentCount >= t.demand) continue; // already have enough of this type
+
+      // Try to place as many of this type as possible
+      for (const col of columns) {
+        if (col.width < t.width - 0.001) continue;
+        const waste = col.width - t.width;
+        // Only use this column if it's a good width match (waste < 50% of item width)
+        // unless it's the only option
+        while (col.remaining >= t.length - 0.001 && (counts.get(t.typeIdx) || 0) < t.demand) {
+          col.remaining -= t.length;
+          counts.set(t.typeIdx, (counts.get(t.typeIdx) || 0) + 1);
+        }
+      }
+    }
+    return counts;
+  }
+
+  const SORTS = [
+    (a, b) => b.width - a.width || b.length - a.length,
+    (a, b) => a.width - b.width || b.length - a.length,
+    (a, b) => (b.length * b.width) - (a.length * a.width),
+    (a, b) => b.length - a.length,
+  ];
+
+  // Mode A: Rip-only (single and mixed column widths)
   for (const cw of colWidths) {
     if (patterns.length >= MAX_PATTERNS) break;
     const numCols = Math.floor((boardW + kerfWidth) / (cw + kerfWidth));
     if (numCols <= 0) continue;
-    packAllStrategies(
-      () => Array.from({ length: numCols }, () => ({ width: cw, remaining: boardL })),
-      compatible, new Set(), addPattern
-    );
+
+    for (const sortFn of SORTS) {
+      const cols = Array.from({ length: numCols }, () => ({ width: cw, remaining: boardL }));
+      addPattern(packColumns(cols, compatible, sortFn));
+    }
   }
 
-  // Try pairs of column widths
+  // Mixed-width columns
   for (let i = 0; i < colWidths.length && patterns.length < MAX_PATTERNS; i++) {
-    for (let j = i; j < colWidths.length && patterns.length < MAX_PATTERNS; j++) {
+    for (let j = i + 1; j < colWidths.length && patterns.length < MAX_PATTERNS; j++) {
       const w1 = colWidths[i], w2 = colWidths[j];
-      for (let n1 = 1; patterns.length < MAX_PATTERNS; n1++) {
-        const used1 = n1 * w1 + (n1 - 1) * kerfWidth;
-        if (used1 > boardW + 0.001) break;
-        const remain = boardW - used1 - kerfWidth;
-        if (remain < w2 - 0.001) continue;
-        const maxN2 = Math.floor((remain + kerfWidth) / (w2 + kerfWidth));
-        for (let n2 = (i === j ? 0 : 1); n2 <= maxN2 && patterns.length < MAX_PATTERNS; n2++) {
-          if (n1 + n2 < 2) continue;
-          packAllStrategies(
-            () => [
-              ...Array.from({ length: n1 }, () => ({ width: w1, remaining: boardL })),
-              ...Array.from({ length: n2 }, () => ({ width: w2, remaining: boardL })),
-            ],
-            compatible, new Set(), addPattern
-          );
+      const used1 = w1;
+      const remain = boardW - w1 - kerfWidth;
+      if (remain < w2 - 0.001) continue;
+      const n2 = Math.floor((remain + kerfWidth) / (w2 + kerfWidth));
+      if (n2 < 1) continue;
+
+      for (const sortFn of SORTS) {
+        const cols = [
+          { width: w1, remaining: boardL },
+          ...Array.from({ length: n2 }, () => ({ width: w2, remaining: boardL })),
+        ];
+        addPattern(packColumns(cols, compatible, sortFn));
+      }
+
+      // Also try n1=n2's width, n2=w1 (reversed counts)
+      const remain2 = boardW - w2 - kerfWidth;
+      if (remain2 >= w1 - 0.001) {
+        const n1r = Math.floor((remain2 + kerfWidth) / (w1 + kerfWidth));
+        if (n1r >= 1) {
+          for (const sortFn of SORTS) {
+            const cols = [
+              { width: w2, remaining: boardL },
+              ...Array.from({ length: n1r }, () => ({ width: w1, remaining: boardL })),
+            ];
+            addPattern(packColumns(cols, compatible, sortFn));
+          }
         }
       }
     }
   }
 
-  // ── MODE B: Crosscut-then-rip ──
-  // Place "wide" items first (items needing >60% of board width), then rip remainder
-  const wideItems = compatible.filter(i => i.width > boardW * 0.6);
-  for (let count = 1; count <= Math.min(6, wideItems.length) && patterns.length < MAX_PATTERNS; count++) {
-    // Try combinations of `count` wide items
-    const combos = combinations(wideItems, count);
-    for (const combo of combos) {
-      if (patterns.length >= MAX_PATTERNS) break;
-      // Check unique IDs
-      const comboIds = new Set(combo.map(i => i._id));
-      if (comboIds.size < count) continue;
-
-      // Total length consumed by crosscuts
-      const crosscutLen = combo.reduce((sum, i) => sum + i.length, 0);
-      if (crosscutLen > boardL + 0.001) continue;
-
-      const remainLen = boardL - crosscutLen;
-      if (remainLen < 0.5) {
-        addPattern(combo);
+  // Mode B: Crosscut-first (wide items first, then rip remainder)
+  const wideTypes = compatible.filter(t => t.width > boardW * 0.6);
+  for (const wideType of wideTypes) {
+    if (patterns.length >= MAX_PATTERNS) break;
+    // Try placing 1, 2, ... of this wide type via crosscut
+    for (let count = 1; count <= Math.min(wideType.demand, Math.floor(boardL / wideType.length)); count++) {
+      const remainLen = boardL - count * wideType.length;
+      if (remainLen < 1) {
+        const tc = new Map([[wideType.typeIdx, count]]);
+        addPattern(tc);
         continue;
       }
 
       // Rip remaining area for narrower items
-      const narrowItems = compatible.filter(i => !comboIds.has(i._id));
+      const narrowTypes = compatible.filter(t => t.typeIdx !== wideType.typeIdx);
       for (const cw of colWidths) {
         if (patterns.length >= MAX_PATTERNS) break;
         const numCols = Math.floor((boardW + kerfWidth) / (cw + kerfWidth));
         if (numCols <= 0) continue;
-        packAllStrategies(
-          () => Array.from({ length: numCols }, () => ({ width: cw, remaining: remainLen })),
-          narrowItems, comboIds, addPattern, combo
-        );
+
+        for (const sortFn of SORTS) {
+          const cols = Array.from({ length: numCols }, () => ({ width: cw, remaining: remainLen }));
+          const tc = packColumns(cols, narrowTypes, sortFn);
+          tc.set(wideType.typeIdx, (tc.get(wideType.typeIdx) || 0) + count);
+          addPattern(tc);
+        }
       }
 
-      // Also try mixed-width rip on remaining area
-      for (let i = 0; i < colWidths.length && patterns.length < MAX_PATTERNS; i++) {
-        for (let j = i + 1; j < colWidths.length && patterns.length < MAX_PATTERNS; j++) {
-          const w1 = colWidths[i], w2 = colWidths[j];
+      // Mixed-width rip on remaining
+      for (let ii = 0; ii < colWidths.length && patterns.length < MAX_PATTERNS; ii++) {
+        for (let jj = ii + 1; jj < colWidths.length && patterns.length < MAX_PATTERNS; jj++) {
+          const w1 = colWidths[ii], w2 = colWidths[jj];
           const remain = boardW - w1 - kerfWidth;
           if (remain < w2 - 0.001) continue;
           const n2 = Math.floor((remain + kerfWidth) / (w2 + kerfWidth));
           if (n2 < 1) continue;
-          packAllStrategies(
-            () => [
+
+          for (const sortFn of SORTS) {
+            const cols = [
               { width: w1, remaining: remainLen },
               ...Array.from({ length: n2 }, () => ({ width: w2, remaining: remainLen })),
-            ],
-            narrowItems, comboIds, addPattern, combo
-          );
+            ];
+            const tc = packColumns(cols, narrowTypes, sortFn);
+            tc.set(wideType.typeIdx, (tc.get(wideType.typeIdx) || 0) + count);
+            addPattern(tc);
+          }
         }
       }
     }
   }
 
-  // ── MODE C: Same-type patterns ──
-  const byPieceName = new Map();
-  for (const item of compatible) {
-    const key = item.piece.name || `${item.piece.length}x${item.piece.width}`;
-    if (!byPieceName.has(key)) byPieceName.set(key, []);
-    byPieceName.get(key).push(item);
-  }
-  for (const [, sameItems] of byPieceName) {
-    if (patterns.length >= MAX_PATTERNS) break;
+  // Mode C: Single-type patterns
+  for (const t of compatible) {
     for (const cw of colWidths) {
+      if (cw < t.width - 0.001) continue;
       const numCols = Math.floor((boardW + kerfWidth) / (cw + kerfWidth));
       if (numCols <= 0) continue;
-      packAllStrategies(
-        () => Array.from({ length: numCols }, () => ({ width: cw, remaining: boardL })),
-        sameItems, new Set(), addPattern
-      );
-    }
-  }
-
-  // ── MODE D: Item-centered patterns ──
-  // For each item, create a pattern where that item goes first, then fill greedily.
-  // This generates diverse patterns like "1 strip + many stands" that greedy misses.
-  for (const primaryItem of compatible) {
-    if (patterns.length >= MAX_PATTERNS) break;
-    for (const cw of colWidths) {
-      if (cw < primaryItem.width - 0.001) continue;
-      const numCols = Math.floor((boardW + kerfWidth) / (cw + kerfWidth));
-      if (numCols <= 0) continue;
-
-      const columns = Array.from({ length: numCols }, () => ({ width: cw, remaining: boardL }));
-      const usedIds = new Set();
-
-      // Place primary item first
-      let placed = false;
-      for (const col of columns) {
-        if (col.width >= primaryItem.width - 0.001 && col.remaining >= primaryItem.length - 0.001) {
-          col.remaining -= primaryItem.length;
-          usedIds.add(primaryItem._id);
-          placed = true;
-          break;
+      const cols = Array.from({ length: numCols }, () => ({ width: cw, remaining: boardL }));
+      const tc = new Map();
+      for (const col of cols) {
+        while (col.remaining >= t.length - 0.001 && (tc.get(t.typeIdx) || 0) < t.demand) {
+          col.remaining -= t.length;
+          tc.set(t.typeIdx, (tc.get(t.typeIdx) || 0) + 1);
         }
       }
-      if (!placed) continue;
-
-      // Fill rest with smallest-width-first (to pack stands after a strip)
-      const rest = packIntoColumns(columns, compatible, usedIds,
-        (a, b) => a.width - b.width || b.length - a.length
-      );
-
-      addPattern([primaryItem, ...rest]);
-      break; // only need one column width per primary item
+      addPattern(tc);
     }
-  }
-
-  // ── Single-item patterns ──
-  for (const item of compatible) {
-    addPattern([item]);
   }
 
   return patterns;
 }
 
-function combinations(arr, k) {
-  if (k === 1) return arr.map(x => [x]);
-  const result = [];
-  for (let i = 0; i <= arr.length - k; i++) {
-    for (const rest of combinations(arr.slice(i + 1), k - 1)) {
-      result.push([arr[i], ...rest]);
-      if (result.length > 200) return result; // safety cap
-    }
-  }
-  return result;
-}
-
 // ──────────────────────────────────────────────
-// PHASE 3: ILP solver
+// PHASE 3: ILP solver (small model!)
 // ──────────────────────────────────────────────
 
-function solveILP(items, allPatterns) {
-  if (items.length === 0) return { totalCost: 0, patterns: [] };
+function solveILP(itemTypes, allPatterns) {
+  if (itemTypes.length === 0) return { totalCost: 0, patterns: [] };
 
   const model = {
     optimize: 'cost', opType: 'min',
     constraints: {}, variables: {}, ints: {},
   };
 
-  for (const item of items) {
-    model.constraints[`item_${item._id}`] = { equal: 1 };
+  // One constraint per item TYPE (not per individual item!)
+  for (let t = 0; t < itemTypes.length; t++) {
+    model.constraints[`type_${t}`] = { min: itemTypes[t].demand };
   }
 
   for (let i = 0; i < allPatterns.length; i++) {
     const pat = allPatterns[i];
-    // Tiny waste penalty to prefer fuller boards on cost ties
     const boardArea = pat.stock.length * pat.stock.width;
-    const usedArea = pat.demands.reduce((s, d) =>
-      s + d.sections.reduce((s2, sec) => s2 + sec.width * sec.length, 0), 0);
+    let usedArea = 0;
+    for (const [ti, count] of pat.typeCounts) {
+      usedArea += itemTypes[ti].width * itemTypes[ti].length * count;
+    }
     const wastePenalty = boardArea > 0 ? ((boardArea - usedArea) / boardArea) * 0.0001 : 0;
 
     const variable = { cost: pat.cost + wastePenalty };
-    for (const id of pat.pieceIds) {
-      variable[`item_${id}`] = 1;
+    for (const [ti, count] of pat.typeCounts) {
+      variable[`type_${ti}`] = count;
     }
     model.variables[`p${i}`] = variable;
     model.ints[`p${i}`] = 1;
@@ -370,7 +312,7 @@ function solveILP(items, allPatterns) {
   for (let i = 0; i < allPatterns.length; i++) {
     const pat = allPatterns[i];
     if (pat.stock.quantity !== null) {
-      const key = `${pat.stock.name}::${pat.stock.price}`;
+      const key = pat.stock.name;
       if (!stockQty.has(key)) stockQty.set(key, { max: pat.stock.quantity, indices: [] });
       stockQty.get(key).indices.push(i);
     }
@@ -395,18 +337,20 @@ function solveILP(items, allPatterns) {
 // Output formatting
 // ──────────────────────────────────────────────
 
-function formatSolution(solution, items, pieces, strategyName) {
+function formatSolution(solution, itemTypes, expandedPieces, strategyName) {
   if (!solution || solution.patterns.length === 0) {
     return {
       totalCost: 0, totalCuts: 0, purchases: [], assignments: [],
-      unassigned: [...pieces], strategyName, boards: [],
+      unassigned: [...expandedPieces], strategyName, boards: [],
     };
   }
 
   const assignments = [];
-  const assignedPieceIds = new Set();
   const purchaseMap = new Map();
   const boards = [];
+
+  // Track how many of each type have been assigned to actual pieces
+  const typeAssigned = new Map();
 
   for (const pat of solution.patterns) {
     const key = `${pat.stock.name}::${pat.stock.price}`;
@@ -415,29 +359,46 @@ function formatSolution(solution, items, pieces, strategyName) {
 
     const boardEntry = { stock: pat.stock, pieces: [] };
 
-    for (const demand of pat.demands) {
-      const piece = demand.piece;
-      if (!assignedPieceIds.has(piece._id)) {
-        // Check if all strips for this piece's glue-up are in some pattern
-        // (for display purposes, show the piece once, not each strip)
-        const isGlue = demand.type === 'glueup';
+    for (const [ti, count] of pat.typeCounts) {
+      const type = itemTypes[ti];
+      for (let c = 0; c < count; c++) {
+        const assigned = typeAssigned.get(ti) || 0;
+        if (assigned >= type.demand) continue; // excess (over-supply)
+        typeAssigned.set(ti, assigned + 1);
+
+        // Find the matching expanded piece
+        const pieceIdx = assigned; // which instance of this type
+
+        boardEntry.pieces.push({
+          piece: type.piece,
+          rotated: false,
+          glueUp: type.isStrip ? { stripCount: type.stripCount } : null,
+          sections: [{ width: type.width, length: type.length }],
+        });
+
         assignments.push({
-          neededPiece: piece,
+          neededPiece: type.piece,
           sourceStock: pat.stock,
           rotated: false,
-          glueUp: isGlue ? { stripCount: demand.stripCount, stockUsed: pat.stock } : null,
+          glueUp: type.isStrip ? { stripCount: type.stripCount, stockUsed: pat.stock } : null,
         });
-        assignedPieceIds.add(piece._id);
       }
-
-      boardEntry.pieces.push({
-        piece: demand.piece,
-        rotated: false,
-        glueUp: demand.type === 'glueup' ? { stripCount: demand.stripCount } : null,
-        sections: demand.sections,
-      });
     }
     boards.push(boardEntry);
+  }
+
+  // Find unassigned pieces
+  const assignedByName = new Map();
+  for (const a of assignments) {
+    const key = a.neededPiece.name;
+    assignedByName.set(key, (assignedByName.get(key) || 0) + 1);
+  }
+
+  const unassigned = [];
+  for (const piece of expandedPieces) {
+    const count = assignedByName.get(piece.name) || 0;
+    if (count <= 0) unassigned.push(piece);
+    else assignedByName.set(piece.name, count - 1);
   }
 
   return {
@@ -445,7 +406,7 @@ function formatSolution(solution, items, pieces, strategyName) {
     totalCuts: assignments.length,
     purchases: Array.from(purchaseMap.values()),
     assignments,
-    unassigned: pieces.filter(p => !assignedPieceIds.has(p._id)),
+    unassigned,
     strategyName,
     boards,
   };
@@ -456,47 +417,39 @@ function formatSolution(solution, items, pieces, strategyName) {
 // ──────────────────────────────────────────────
 
 export function ilpOptimize(neededPieces, availableStock, constraints) {
-  // Expand quantities
-  const pieces = [];
-  for (const p of neededPieces) {
-    for (let i = 0; i < p.quantity; i++) {
-      pieces.push({ ...p, quantity: 1, _id: pieces.length });
-    }
-  }
-
-  if (pieces.length === 0) {
+  const expanded = expandPieces(neededPieces);
+  if (expanded.length === 0) {
     return [{ totalCost: 0, totalCuts: 0, purchases: [], assignments: [], unassigned: [], strategyName: 'Optimal', boards: [] }];
   }
 
-  // Phase 1: Create items
-  const items = createItems(pieces, availableStock, constraints);
+  // Phase 1: item types
+  const itemTypes = createItemTypes(neededPieces, availableStock, constraints);
 
-  // Phase 2: Generate patterns
+  // Phase 2: patterns
   let allPatterns = [];
   for (const stock of availableStock) {
-    allPatterns.push(...generatePatterns(stock, items, constraints));
+    allPatterns.push(...generatePatterns(stock, itemTypes, constraints));
   }
 
   if (allPatterns.length === 0) {
-    return [formatSolution(null, items, pieces, 'No feasible solution')];
+    return [formatSolution(null, itemTypes, expanded, 'No feasible solution')];
   }
 
-  // Phase 3: Solve
-  const solution = solveILP(items, allPatterns);
-  const result = formatSolution(solution, items, pieces, 'Optimal (ILP)');
-
-  // Alt: no glue-ups
-  const noGlue = allPatterns.filter(p => !p.demands.some(d => d.type === 'glueup'));
-  const noGlueSol = solveILP(items.filter(i => i.isDirect), noGlue);
-  const noGlueResult = formatSolution(noGlueSol, items, pieces, 'No glue-ups');
+  // Phase 3: solve
+  const solution = solveILP(itemTypes, allPatterns);
+  const result = formatSolution(solution, itemTypes, expanded, 'Optimal (ILP)');
 
   // Alt: fewer boards
-  const fewerPats = allPatterns.map(p => ({ ...p, origCost: p.cost, cost: p.cost - p.pieceIds.size * 0.001 }));
-  const fewerSol = solveILP(items, fewerPats);
+  const fewerPats = allPatterns.map(p => {
+    let totalItems = 0;
+    for (const [, c] of p.typeCounts) totalItems += c;
+    return { ...p, origCost: p.cost, cost: p.cost - totalItems * 0.001 };
+  });
+  const fewerSol = solveILP(itemTypes, fewerPats);
   if (fewerSol) fewerSol.totalCost = fewerSol.patterns.reduce((s, p) => s + (p.origCost || p.cost), 0);
-  const fewerResult = formatSolution(fewerSol, items, pieces, 'Fewer boards');
+  const fewerResult = formatSolution(fewerSol, itemTypes, expanded, 'Fewer boards');
 
-  const results = [result, noGlueResult, fewerResult]
+  const results = [result, fewerResult]
     .filter(r => r.unassigned.length === 0 || r === result)
     .sort((a, b) => a.totalCost - b.totalCost);
 

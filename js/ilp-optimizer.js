@@ -85,13 +85,19 @@ function generatePatterns(stockItem, pieces, constraints) {
       const pl = p.length + overageMargin;
       if (pl <= boardW + 0.001) colWidthSet.add(pl);
     }
-    // Glue-up strip widths: for N strips, minWidth = neededWidth/N
+    // Glue-up: only use full board width (fewest joints).
+    // Also add the minimum strip width for 2-strip glue-up (widest possible rip
+    // that leaves room for other pieces alongside).
     if (p.canGlueWidth && pw > boardW) {
-      for (let n = 2; n <= maxGlueJoints + 1; n++) {
-        const minW = pw / n;
-        if (minW >= minGlueStripWidth && minW <= boardW) {
-          colWidthSet.add(Math.ceil(minW * 100) / 100); // round up slightly
-        }
+      // Full width gives fewest strips
+      const nFull = Math.ceil(pw / boardW);
+      if (nFull > 1 && nFull - 1 <= maxGlueJoints) {
+        // boardW is already in colWidthSet
+      }
+      // Minimum width for 2-strip glue-up (if feasible)
+      const minW2 = Math.ceil((pw / 2) * 100) / 100;
+      if (minW2 >= minGlueStripWidth && minW2 <= boardW) {
+        colWidthSet.add(minW2);
       }
     }
   }
@@ -113,16 +119,21 @@ function generatePatterns(stockItem, pieces, constraints) {
           cutsNeeded: 1, isGlueUp: false, stripCount: 0,
         });
       }
-      // Glue-up: piece too wide, but N strips of this column width cover it
+      // Glue-up: only at full board width (fewest joints) or the 2-strip minimum width
       if (piece.canGlueWidth && pw > boardW && cw >= minGlueStripWidth) {
-        const n = Math.ceil(pw / cw);
-        if (n > 1 && n - 1 <= maxGlueJoints) {
-          const cutLen = piece.length + overageMargin + kerfWidth;
-          if (cutLen <= boardLen + 0.001) {
-            placements.push({
-              piece, colWidth: cw, lengthPerCut: cutLen,
-              cutsNeeded: n, isGlueUp: true, stripCount: n,
-            });
+        const minW2 = Math.ceil((pw / 2) * 100) / 100;
+        const isFull = Math.abs(cw - boardW) < 0.01;
+        const isMin2 = Math.abs(cw - minW2) < 0.01;
+        if (isFull || isMin2) {
+          const n = Math.ceil(pw / cw);
+          if (n > 1 && n - 1 <= maxGlueJoints) {
+            const cutLen = piece.length + overageMargin + kerfWidth;
+            if (cutLen <= boardLen + 0.001) {
+              placements.push({
+                piece, colWidth: cw, lengthPerCut: cutLen,
+                cutsNeeded: n, isGlueUp: true, stripCount: n,
+              });
+            }
           }
         }
       }
@@ -312,6 +323,65 @@ function generatePatterns(stockItem, pieces, constraints) {
       for (let i = 0; i < numCols; i++) columns.push({ width: cw, remaining: boardLen });
       const { placements, usedIds } = packRipPlan(columns, samePieces);
       addPattern(placements, usedIds);
+    }
+  }
+
+  // Strategy 4: Crosscut-first — place wide items (full board width) first,
+  // then rip the remaining section for narrower items.
+  // This handles: smaller bases (full width) + base strips + stands on same board.
+  {
+    const wideItems = compatible.filter(p => {
+      const pw = p.width + overageMargin;
+      return pw > boardW * 0.6 && pw <= boardW + 0.001;
+    });
+
+    if (wideItems.length > 0) {
+      // Try placing 1, 2, 3 wide items via crosscuts, then rip remainder
+      for (let count = 1; count <= Math.min(4, wideItems.length) && patterns.length < MAX_PATTERNS; count++) {
+        // Simple: just take the first `count` wide items
+        const combo = wideItems.slice(0, count);
+        const ids = new Set(combo.map(p => p._id));
+        if (ids.size < count) continue; // duplicates
+
+        let usedLen = 0;
+        for (const p of combo) {
+          usedLen += p.length + overageMargin + kerfWidth;
+        }
+        if (usedLen > boardLen + 0.001) continue;
+
+        const remainLen = boardLen - usedLen;
+        if (remainLen < kerfWidth + overageMargin) {
+          // No room for rip section, just the wide items
+          addPattern(
+            combo.map(p => ({ piece: p, isGlueUp: false, stripCount: 0, colWidth: p.width + overageMargin })),
+            ids
+          );
+          continue;
+        }
+
+        // Rip the remaining section for narrower items
+        const narrowItems = compatible.filter(p => !ids.has(p._id));
+        // Try each column width for the ripped section
+        for (const cw of colWidths) {
+          if (cw > boardW + 0.001) continue;
+          const numCols = Math.floor((boardW + kerfWidth) / (cw + kerfWidth));
+          if (numCols <= 0) continue;
+
+          const columns = [];
+          for (let i = 0; i < numCols; i++) columns.push({ width: cw, remaining: remainLen });
+
+          const { placements: ripPlacements, usedIds: ripIds } = packRipPlan(columns, narrowItems);
+
+          const allPlacements = [
+            ...combo.map(p => ({ piece: p, isGlueUp: false, stripCount: 0, colWidth: p.width + overageMargin })),
+            ...ripPlacements,
+          ];
+          const allIds = new Set([...ids, ...ripIds]);
+          if (allPlacements.length > combo.length) { // only if rip added something
+            addPattern(allPlacements, allIds);
+          }
+        }
+      }
     }
   }
 

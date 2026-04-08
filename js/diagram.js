@@ -6,15 +6,66 @@ const COLORS = [
 ];
 
 /**
- * Render cut diagrams using the ACTUAL column layout from the optimizer.
- *
- * Each board has a `layout` array of columns:
- *   [{ width, items: [{ name, width, length }] }]
- *
- * Visual model:
- * - Y-axis (vertical) = board width, columns stacked top-to-bottom
- * - X-axis (horizontal) = board length, items crosscut left-to-right within each column
+ * Lay out pieces on a board by simulating the rip-then-crosscut process.
+ * Groups pieces by section width into columns, packs each column along the length.
+ * Returns array of { x, y, w, h, piece } for rendering.
  */
+function layoutBoard(board) {
+  const boardL = board.stock.length;
+  const boardW = board.stock.width;
+  const rects = [];
+
+  // Collect all sections from all pieces on this board
+  const sections = [];
+  for (const bp of board.pieces) {
+    for (const sec of bp.sections) {
+      sections.push({ sec, bp });
+    }
+  }
+
+  if (sections.length === 0) return rects;
+
+  // Group by section width (= rip column width)
+  const byWidth = new Map();
+  for (const item of sections) {
+    const key = Math.round(item.sec.width * 1000);
+    if (!byWidth.has(key)) byWidth.set(key, []);
+    byWidth.get(key).push(item);
+  }
+
+  // Sort columns widest first
+  const sortedWidths = [...byWidth.keys()].sort((a, b) => b - a);
+
+  let yOffset = 0;
+  for (const widthKey of sortedWidths) {
+    const colWidth = widthKey / 1000;
+    const items = byWidth.get(widthKey);
+
+    // Pack items along the length (x-axis)
+    let xOffset = 0;
+    for (const item of items) {
+      if (xOffset + item.sec.length > boardL + 0.5) {
+        // Wrap to next row of same column width
+        yOffset += colWidth;
+        xOffset = 0;
+      }
+
+      rects.push({
+        x: xOffset, y: yOffset,
+        w: item.sec.length, h: colWidth,
+        piece: item.bp.piece,
+        glueUp: item.bp.glueUp,
+        rotated: item.bp.rotated,
+      });
+
+      xOffset += item.sec.length;
+    }
+    yOffset += colWidth;
+  }
+
+  return rects;
+}
+
 export function renderDiagrams(container, boards, assignList) {
   container.innerHTML = '';
   if (!boards || boards.length === 0) return;
@@ -23,18 +74,8 @@ export function renderDiagrams(container, boards, assignList) {
   const colorMap = new Map();
   let colorIdx = 0;
   for (const board of boards) {
-    for (const col of (board.layout || [])) {
-      for (const item of col.items) {
-        const name = item.name || 'unknown';
-        if (!colorMap.has(name)) {
-          colorMap.set(name, COLORS[colorIdx % COLORS.length]);
-          colorIdx++;
-        }
-      }
-    }
-    // Fallback: also check pieces
     for (const bp of board.pieces) {
-      const name = bp.piece.name || `${bp.piece.length}"×${bp.piece.width}"`;
+      const name = bp.piece.name || 'unknown';
       if (!colorMap.has(name)) {
         colorMap.set(name, COLORS[colorIdx % COLORS.length]);
         colorIdx++;
@@ -64,7 +105,6 @@ export function renderDiagrams(container, boards, assignList) {
     const board = boards[boardIdx];
     const boardL = board.stock.length;
     const boardW = board.stock.width;
-    const layout = board.layout || [];
 
     const svgWidth = boardL * scale + 2 * PADDING;
     const svgHeight = boardW * scale + 2 * PADDING;
@@ -112,87 +152,75 @@ export function renderDiagrams(container, boards, assignList) {
     boardRect.setAttribute('stroke-width', '1');
     svg.appendChild(boardRect);
 
-    if (layout.length > 0) {
-      // Use the actual column layout from the optimizer
-      let yOffset = 0;
-      for (const col of layout) {
-        if (!col.items || col.items.length === 0) { yOffset += col.width; continue; }
+    // Layout pieces
+    const rects = layoutBoard(board);
 
-        let xOffset = 0;
-        for (const item of col.items) {
-          const x = PADDING + xOffset * scale;
-          const y = PADDING + yOffset * scale;
-          const w = item.length * scale;
-          const h = col.width * scale;
+    for (const r of rects) {
+      const x = PADDING + r.x * scale;
+      const y = PADDING + r.y * scale;
+      const w = r.w * scale;
+      const h = r.h * scale;
 
-          if (xOffset + item.length > boardL + 0.5) break;
+      // Clip to board
+      if (r.x + r.w > boardL + 0.5 || r.y + r.h > boardW + 0.5) continue;
 
-          const name = item.name || 'unknown';
-          const color = colorMap.get(name) || '#ccc';
+      const name = r.piece.name || 'unknown';
+      const color = colorMap.get(name) || '#ccc';
+      const glueLabel = r.glueUp ? ' (strip)' : '';
 
-          const rect = document.createElementNS(SVG_NS, 'rect');
-          rect.setAttribute('class', 'piece-rect');
-          rect.setAttribute('x', x);
-          rect.setAttribute('y', y);
-          rect.setAttribute('width', w);
-          rect.setAttribute('height', h);
-          rect.setAttribute('fill', color);
-          rect.setAttribute('data-assign-idx', globalAssignIdx);
-          svg.appendChild(rect);
+      const rect = document.createElementNS(SVG_NS, 'rect');
+      rect.setAttribute('class', 'piece-rect');
+      rect.setAttribute('x', x);
+      rect.setAttribute('y', y);
+      rect.setAttribute('width', w);
+      rect.setAttribute('height', h);
+      rect.setAttribute('fill', color);
+      rect.setAttribute('data-assign-idx', globalAssignIdx);
+      svg.appendChild(rect);
 
-          // Labels
-          const stripLabel = item.isStrip ? ` (strip)` : '';
-          const displayName = name + stripLabel;
+      if (w > 30 && h > 14) {
+        const displayName = name + glueLabel;
+        const label = document.createElementNS(SVG_NS, 'text');
+        label.setAttribute('class', 'piece-label');
+        label.setAttribute('x', x + w / 2);
+        label.setAttribute('y', y + h / 2 - 1);
+        label.setAttribute('text-anchor', 'middle');
+        label.textContent = displayName.length > w / 6 ? name : displayName;
+        svg.appendChild(label);
 
-          if (w > 35 && h > 16) {
-            const label = document.createElementNS(SVG_NS, 'text');
-            label.setAttribute('class', 'piece-label');
-            label.setAttribute('x', x + w / 2);
-            label.setAttribute('y', y + h / 2 - 1);
-            label.setAttribute('text-anchor', 'middle');
-            label.textContent = displayName.length > w / 6.5 ? name : displayName;
-            svg.appendChild(label);
-
-            // Show the PIECE dimensions, not the strip dimensions
-            const pieceW = item.isStrip ? item.width * item.stripCount : item.width;
-            const dim = document.createElementNS(SVG_NS, 'text');
-            dim.setAttribute('class', 'piece-dim');
-            dim.setAttribute('x', x + w / 2);
-            dim.setAttribute('y', y + h / 2 + 10);
-            dim.setAttribute('text-anchor', 'middle');
-            dim.textContent = `${Math.round(item.length * 10) / 10}" × ${Math.round(pieceW * 10) / 10}"`;
-            svg.appendChild(dim);
-          }
-
-          // Tooltip
-          const showTip = () => {
-            const tipText = item.isStrip
-              ? `${name} (glue-up strip, ${item.stripCount} strips total): ${item.length}" × ${item.width}"`
-              : `${name}: ${item.length}" × ${item.width}"`;
-            tooltip.textContent = tipText;
-            tooltip.style.display = 'block';
-            const svgRect = svg.getBoundingClientRect();
-            const containerRect = container.getBoundingClientRect();
-            tooltip.style.left = (svgRect.left - containerRect.left + parseFloat(rect.getAttribute('x')) + w / 2 - tooltip.offsetWidth / 2) + 'px';
-            tooltip.style.top = (svgRect.top - containerRect.top + parseFloat(rect.getAttribute('y')) - tooltip.offsetHeight - 8) + 'px';
-          };
-          const hideTip = () => { tooltip.style.display = 'none'; };
-          rect.addEventListener('mouseenter', showTip);
-          rect.addEventListener('mouseleave', hideTip);
-          rect.addEventListener('click', (e) => {
-            e.stopPropagation();
-            svg.querySelectorAll('.piece-rect.highlighted').forEach(r => r.classList.remove('highlighted'));
-            rect.classList.toggle('highlighted');
-            if (rect.classList.contains('highlighted')) showTip(); else hideTip();
-          });
-
-          xOffset += item.length;
+        if (h > 22) {
+          const dim = document.createElementNS(SVG_NS, 'text');
+          dim.setAttribute('class', 'piece-dim');
+          dim.setAttribute('x', x + w / 2);
+          dim.setAttribute('y', y + h / 2 + 10);
+          dim.setAttribute('text-anchor', 'middle');
+          dim.textContent = `${r.piece.length}" × ${r.piece.width}"`;
+          svg.appendChild(dim);
         }
-        yOffset += col.width;
       }
+
+      // Tooltip
+      const showTip = () => {
+        let tip = `${name}: ${r.piece.length}" × ${r.piece.width}"`;
+        if (r.glueUp) tip += ` (glue-up: ${r.glueUp.stripCount} strips)`;
+        tooltip.textContent = tip;
+        tooltip.style.display = 'block';
+        const svgR = svg.getBoundingClientRect();
+        const contR = container.getBoundingClientRect();
+        tooltip.style.left = Math.max(0, svgR.left - contR.left + x + w / 2 - tooltip.offsetWidth / 2) + 'px';
+        tooltip.style.top = (svgR.top - contR.top + y - tooltip.offsetHeight - 8) + 'px';
+      };
+      const hideTip = () => { tooltip.style.display = 'none'; };
+      rect.addEventListener('mouseenter', showTip);
+      rect.addEventListener('mouseleave', hideTip);
+      rect.addEventListener('click', (e) => {
+        e.stopPropagation();
+        svg.querySelectorAll('.piece-rect.highlighted').forEach(el => el.classList.remove('highlighted'));
+        rect.classList.toggle('highlighted');
+        if (rect.classList.contains('highlighted')) showTip(); else hideTip();
+      });
     }
 
-    // Advance global assign index
     globalAssignIdx += board.pieces.length;
 
     svgWrapper.appendChild(svg);
@@ -200,24 +228,15 @@ export function renderDiagrams(container, boards, assignList) {
     container.appendChild(wrapper);
   }
 
-  // Dismiss
   document.addEventListener('click', () => {
     tooltip.style.display = 'none';
     container.querySelectorAll('.piece-rect.highlighted').forEach(r => r.classList.remove('highlighted'));
   });
 }
 
-function highlightAssignRow(assignList, index, highlight) {
-  if (!assignList) return;
-  const li = assignList.children[index];
-  if (!li) return;
-  li.classList.toggle('assign-highlighted', highlight);
-}
-
 export function wireAssignListHover(assignList, diagramContainer) {
   if (!assignList || !diagramContainer) return;
-  const items = assignList.querySelectorAll('li');
-  items.forEach((li, idx) => {
+  assignList.querySelectorAll('li').forEach((li, idx) => {
     li.addEventListener('mouseenter', () => {
       diagramContainer.querySelectorAll(`.piece-rect[data-assign-idx="${idx}"]`).forEach(r => r.classList.add('highlighted'));
     });

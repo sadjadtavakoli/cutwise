@@ -141,27 +141,35 @@ export function renderDiagrams(container, boards, assignList) {
           svg.appendChild(rect);
 
           // Labels
+          const stripLabel = item.isStrip ? ` (strip)` : '';
+          const displayName = name + stripLabel;
+
           if (w > 35 && h > 16) {
             const label = document.createElementNS(SVG_NS, 'text');
             label.setAttribute('class', 'piece-label');
             label.setAttribute('x', x + w / 2);
             label.setAttribute('y', y + h / 2 - 1);
             label.setAttribute('text-anchor', 'middle');
-            label.textContent = name;
+            label.textContent = displayName.length > w / 6.5 ? name : displayName;
             svg.appendChild(label);
 
+            // Show the PIECE dimensions, not the strip dimensions
+            const pieceW = item.isStrip ? item.width * item.stripCount : item.width;
             const dim = document.createElementNS(SVG_NS, 'text');
             dim.setAttribute('class', 'piece-dim');
             dim.setAttribute('x', x + w / 2);
             dim.setAttribute('y', y + h / 2 + 10);
             dim.setAttribute('text-anchor', 'middle');
-            dim.textContent = `${Math.round(item.length * 10) / 10}" × ${Math.round(item.width * 10) / 10}"`;
+            dim.textContent = `${Math.round(item.length * 10) / 10}" × ${Math.round(pieceW * 10) / 10}"`;
             svg.appendChild(dim);
           }
 
           // Tooltip
           const showTip = () => {
-            tooltip.textContent = `${name}: ${item.length}" × ${item.width}"`;
+            const tipText = item.isStrip
+              ? `${name} (glue-up strip, ${item.stripCount} strips total): ${item.length}" × ${item.width}"`
+              : `${name}: ${item.length}" × ${item.width}"`;
+            tooltip.textContent = tipText;
             tooltip.style.display = 'block';
             const svgRect = svg.getBoundingClientRect();
             const containerRect = container.getBoundingClientRect();

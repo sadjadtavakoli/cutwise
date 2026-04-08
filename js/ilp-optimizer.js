@@ -145,7 +145,7 @@ function generatePatterns(stockItem, itemTypes, constraints) {
         while (col.remaining >= t.length - 0.001 && (counts.get(t.typeIdx) || 0) < t.demand) {
           col.remaining -= t.length;
           counts.set(t.typeIdx, (counts.get(t.typeIdx) || 0) + 1);
-          col.items.push({ typeIdx: t.typeIdx, width: t.width, length: t.length, name: t.name });
+          col.items.push({ typeIdx: t.typeIdx, width: t.width, length: t.length, name: t.piece.name, isStrip: t.isStrip, stripCount: t.stripCount });
         }
       }
     }
@@ -224,7 +224,7 @@ function generatePatterns(stockItem, itemTypes, constraints) {
       // Build a "crosscut column" for the wide items (full board width)
       function makeWideCol() {
         const col = { width: boardW, items: [] };
-        for (let c = 0; c < count; c++) col.items.push({ typeIdx: wideType.typeIdx, width: wideType.width, length: wideType.length, name: wideType.name });
+        for (let c = 0; c < count; c++) col.items.push({ typeIdx: wideType.typeIdx, width: wideType.width, length: wideType.length, name: wideType.piece.name, isStrip: wideType.isStrip, stripCount: wideType.stripCount });
         return col;
       }
 
@@ -278,7 +278,7 @@ function generatePatterns(stockItem, itemTypes, constraints) {
         while (col.remaining >= t.length - 0.001 && (tc.get(t.typeIdx) || 0) < t.demand) {
           col.remaining -= t.length;
           tc.set(t.typeIdx, (tc.get(t.typeIdx) || 0) + 1);
-          col.items.push({ typeIdx: t.typeIdx, width: t.width, length: t.length, name: t.name });
+          col.items.push({ typeIdx: t.typeIdx, width: t.width, length: t.length, name: t.piece.name, isStrip: t.isStrip, stripCount: t.stripCount });
         }
       }
       addPattern(tc, cols);

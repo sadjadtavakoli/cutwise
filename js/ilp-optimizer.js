@@ -646,6 +646,49 @@ function generateAllPatterns(expandedPieces, availableStock, constraints) {
       }
     }
 
+    // Same-type patterns: pack only pieces with the same name on one board.
+    // This ensures the ILP can choose pure-stand boards, pure-base boards, etc.
+    const demandsByName = new Map();
+    for (const d of demands) {
+      const key = d.piece.name || `${d.piece.length}x${d.piece.width}`;
+      if (!demandsByName.has(key)) demandsByName.set(key, []);
+      demandsByName.get(key).push(d);
+    }
+
+    for (const [name, sameDemands] of demandsByName) {
+      if (patterns.length >= MAX_PATTERNS) break;
+      if (sameDemands.length <= 1) continue; // single-piece already handled below
+
+      const selected = [];
+      const usedIds = new Set();
+
+      for (const d of sameDemands) {
+        if (usedIds.has(d.piece._id)) continue;
+        const allSections = [
+          ...selected.flatMap(sd => sd.sections.map(s => ({ ...s, demandPieceId: sd.piece._id }))),
+          ...d.sections.map(s => ({ ...s, demandPieceId: d.piece._id })),
+        ];
+        const newRows = packSectionsIntoRows(allSections, boardLen, boardW);
+        if (newRows) {
+          selected.push(d);
+          usedIds.add(d.piece._id);
+        }
+      }
+
+      if (selected.length > 1) {
+        const key = [...usedIds].sort().join(',');
+        if (!seenPatterns.has(key)) {
+          seenPatterns.add(key);
+          patterns.push({
+            stock: stock,
+            demands: selected,
+            pieceIds: new Set(usedIds),
+            cost: stockCost(stock),
+          });
+        }
+      }
+    }
+
     // Single-piece patterns
     for (const d of demands) {
       const key = `${d.piece._id}`;

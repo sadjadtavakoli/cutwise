@@ -133,14 +133,23 @@ export function renderDiagrams(container, boards, assignList) {
       byHeight.get(key).push(item);
     }
 
-    // Stack rows along length (x-axis), pieces within row along width (y-axis)
+    // Stack rows along length (x-axis), pieces within row along width (y-axis).
+    // When pieces overflow the board width, wrap into a new column (advance x).
     let xOffset = 0;
     for (const [heightKey, items] of byHeight) {
-      const rowLen = heightKey / 1000; // this is section.length = row height along x
+      const rowLen = heightKey / 1000; // section.length = column width along x
       let yOffset = 0;
+      let colStartX = xOffset;
 
       for (const item of items) {
         const secWidth = item.sec.width; // width along y-axis
+
+        // Wrap to next column if this piece would overflow board width
+        if (yOffset + secWidth > boardW + 0.01) {
+          xOffset += rowLen;
+          yOffset = 0;
+        }
+
         const x = PADDING + xOffset * scale;
         const y = PADDING + yOffset * scale;
         const w = rowLen * scale;

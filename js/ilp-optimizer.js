@@ -783,13 +783,14 @@ function formatSolution(solution, expandedPieces, strategyName) {
   if (!solution || solution.patterns.length === 0) {
     return {
       totalCost: 0, totalCuts: 0, purchases: [], assignments: [],
-      unassigned: [...expandedPieces], strategyName,
+      unassigned: [...expandedPieces], strategyName, boards: [],
     };
   }
 
   const assignments = [];
   const assignedIds = new Set();
   const purchaseMap = new Map();
+  const boards = [];
 
   for (const pattern of solution.patterns) {
     const stockKey = `${pattern.stock.name}::${pattern.stock.price}`;
@@ -798,6 +799,11 @@ function formatSolution(solution, expandedPieces, strategyName) {
     } else {
       purchaseMap.set(stockKey, { stock: pattern.stock, quantity: 1 });
     }
+
+    const boardEntry = {
+      stock: pattern.stock,
+      pieces: [],
+    };
 
     for (const demand of pattern.demands) {
       const isGlue = demand.type === 'glueup';
@@ -808,7 +814,15 @@ function formatSolution(solution, expandedPieces, strategyName) {
         glueUp: isGlue ? { stripCount: demand.stripCount, stockUsed: pattern.stock } : null,
       });
       assignedIds.add(demand.piece._id);
+      boardEntry.pieces.push({
+        piece: demand.piece,
+        rotated: demand.rotated || false,
+        glueUp: isGlue ? { stripCount: demand.stripCount } : null,
+        sections: demand.sections,
+      });
     }
+
+    boards.push(boardEntry);
   }
 
   return {
@@ -818,6 +832,7 @@ function formatSolution(solution, expandedPieces, strategyName) {
     assignments,
     unassigned: expandedPieces.filter(p => !assignedIds.has(p._id)),
     strategyName,
+    boards,
   };
 }
 

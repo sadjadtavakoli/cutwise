@@ -62,6 +62,9 @@ async function handleAuthStateChanged(user) {
     const { createFirestoreStorage } = await import('./firestore-storage.js');
     currentStorage = createFirestoreStorage(user.uid);
 
+    // Always close the sign-in modal on successful auth
+    hideSignInModal();
+
     userAvatar.src = user.photoURL || '';
     userName.textContent = user.displayName || user.email || 'User';
     userIndicator.hidden = false;

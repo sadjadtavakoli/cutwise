@@ -1,4 +1,4 @@
-import solver from '../node_modules/javascript-lp-solver/dist/index.browser.mjs';
+import solver from 'javascript-lp-solver';
 import { stockCost } from './cost.js';
 
 /**

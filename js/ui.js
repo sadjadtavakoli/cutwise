@@ -134,11 +134,23 @@ export function renderResults(container, results) {
       </div>
       <div class="result-section-title">Purchase List</div>
       <ul class="result-list">${purchaseHtml}</ul>
+      <div class="result-section-title">Cut Diagrams</div>
+      <div class="diagram-container"></div>
       <div class="result-section-title">Cut Assignments</div>
-      <ul class="result-list">${assignHtml}</ul>
+      <ul class="result-list assign-list">${assignHtml}</ul>
       ${unassignedHtml}
     `;
     container.appendChild(card);
+
+    // Render diagrams if board data is available
+    if (result.boards && result.boards.length > 0) {
+      const diagramContainer = card.querySelector('.diagram-container');
+      const assignList = card.querySelector('.assign-list');
+      import('./diagram.js').then(({ renderDiagrams, wireAssignListHover }) => {
+        renderDiagrams(diagramContainer, result.boards, assignList);
+        wireAssignListHover(assignList, diagramContainer);
+      });
+    }
   });
 }
 

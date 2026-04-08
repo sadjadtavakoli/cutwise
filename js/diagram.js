@@ -6,21 +6,33 @@ const COLORS = [
 ];
 
 /**
- * Render cut diagrams for a solution's boards.
+ * Render cut diagrams using the ACTUAL column layout from the optimizer.
  *
- * Layout model matches the optimizer: boards are ripped into columns,
- * each column is independently crosscut for pieces.
- * - Y-axis (vertical) = board width, divided into columns by rip cuts
- * - X-axis (horizontal) = board length, pieces crosscut within each column
+ * Each board has a `layout` array of columns:
+ *   [{ width, items: [{ name, width, length }] }]
+ *
+ * Visual model:
+ * - Y-axis (vertical) = board width, columns stacked top-to-bottom
+ * - X-axis (horizontal) = board length, items crosscut left-to-right within each column
  */
 export function renderDiagrams(container, boards, assignList) {
   container.innerHTML = '';
   if (!boards || boards.length === 0) return;
 
-  // Color map: unique piece name → color
+  // Color map
   const colorMap = new Map();
   let colorIdx = 0;
   for (const board of boards) {
+    for (const col of (board.layout || [])) {
+      for (const item of col.items) {
+        const name = item.name || 'unknown';
+        if (!colorMap.has(name)) {
+          colorMap.set(name, COLORS[colorIdx % COLORS.length]);
+          colorIdx++;
+        }
+      }
+    }
+    // Fallback: also check pieces
     for (const bp of board.pieces) {
       const name = bp.piece.name || `${bp.piece.length}"×${bp.piece.width}"`;
       if (!colorMap.has(name)) {
@@ -30,7 +42,7 @@ export function renderDiagrams(container, boards, assignList) {
     }
   }
 
-  // Uniform scale based on largest board length
+  // Scale
   let maxBoardLen = 0;
   for (const board of boards) {
     if (board.stock.length > maxBoardLen) maxBoardLen = board.stock.length;
@@ -39,7 +51,7 @@ export function renderDiagrams(container, boards, assignList) {
   const PADDING = 10;
   const scale = maxBoardLen > 0 ? (MAX_SVG_WIDTH - 2 * PADDING) / maxBoardLen : 1;
 
-  // Tooltip (shared)
+  // Tooltip
   const tooltip = document.createElement('div');
   tooltip.className = 'diagram-tooltip';
   tooltip.style.display = 'none';
@@ -52,6 +64,7 @@ export function renderDiagrams(container, boards, assignList) {
     const board = boards[boardIdx];
     const boardL = board.stock.length;
     const boardW = board.stock.width;
+    const layout = board.layout || [];
 
     const svgWidth = boardL * scale + 2 * PADDING;
     const svgHeight = boardW * scale + 2 * PADDING;
@@ -73,7 +86,7 @@ export function renderDiagrams(container, boards, assignList) {
     svg.setAttribute('height', svgHeight);
     svg.setAttribute('viewBox', `0 0 ${svgWidth} ${svgHeight}`);
 
-    // Waste hatch pattern
+    // Waste hatch
     const defs = document.createElementNS(SVG_NS, 'defs');
     const pattern = document.createElementNS(SVG_NS, 'pattern');
     pattern.setAttribute('id', `waste-hatch-${boardIdx}`);
@@ -88,7 +101,7 @@ export function renderDiagrams(container, boards, assignList) {
     defs.appendChild(pattern);
     svg.appendChild(defs);
 
-    // Board outline (waste-hatched background)
+    // Board outline
     const boardRect = document.createElementNS(SVG_NS, 'rect');
     boardRect.setAttribute('x', PADDING);
     boardRect.setAttribute('y', PADDING);
@@ -99,149 +112,90 @@ export function renderDiagrams(container, boards, assignList) {
     boardRect.setAttribute('stroke-width', '1');
     svg.appendChild(boardRect);
 
-    // Collect all sections with their parent info
-    const allSections = [];
-    for (const bp of board.pieces) {
-      const assignIdx = globalAssignIdx;
-      if (bp.glueUp && bp.sections.length > 1) {
-        for (let i = 0; i < bp.sections.length; i++) {
-          allSections.push({ sec: bp.sections[i], bp, stripNum: i + 1, assignIdx });
-        }
-      } else {
-        for (const sec of bp.sections) {
-          allSections.push({ sec, bp, stripNum: bp.glueUp ? 1 : 0, assignIdx });
-        }
-      }
-      globalAssignIdx++;
-    }
+    if (layout.length > 0) {
+      // Use the actual column layout from the optimizer
+      let yOffset = 0;
+      for (const col of layout) {
+        if (!col.items || col.items.length === 0) { yOffset += col.width; continue; }
 
-    // Layout: group sections into columns by width, then pack along length (x-axis).
-    // Columns stack along width (y-axis).
-    const byWidth = new Map();
-    for (const item of allSections) {
-      const key = Math.round(item.sec.width * 1000);
-      if (!byWidth.has(key)) byWidth.set(key, []);
-      byWidth.get(key).push(item);
-    }
+        let xOffset = 0;
+        for (const item of col.items) {
+          const x = PADDING + xOffset * scale;
+          const y = PADDING + yOffset * scale;
+          const w = item.length * scale;
+          const h = col.width * scale;
 
-    // Sort columns: widest first (they visually anchor the diagram)
-    const sortedWidths = [...byWidth.keys()].sort((a, b) => b - a);
+          if (xOffset + item.length > boardL + 0.5) break;
 
-    let yOffset = 0; // tracks vertical position (board width axis)
-    for (const widthKey of sortedWidths) {
-      const colWidth = widthKey / 1000;
-      const items = byWidth.get(widthKey);
+          const name = item.name || 'unknown';
+          const color = colorMap.get(name) || '#ccc';
 
-      // Pack items into this column along the x-axis (board length)
-      let xOffset = 0;
-      for (const item of items) {
-        const x = PADDING + xOffset * scale;
-        const y = PADDING + yOffset * scale;
-        const w = item.sec.length * scale;
-        const h = colWidth * scale;
+          const rect = document.createElementNS(SVG_NS, 'rect');
+          rect.setAttribute('class', 'piece-rect');
+          rect.setAttribute('x', x);
+          rect.setAttribute('y', y);
+          rect.setAttribute('width', w);
+          rect.setAttribute('height', h);
+          rect.setAttribute('fill', color);
+          rect.setAttribute('data-assign-idx', globalAssignIdx);
+          svg.appendChild(rect);
 
-        // Clip to board bounds
-        if (xOffset + item.sec.length > boardL + 0.01) break;
+          // Labels
+          if (w > 35 && h > 16) {
+            const label = document.createElementNS(SVG_NS, 'text');
+            label.setAttribute('class', 'piece-label');
+            label.setAttribute('x', x + w / 2);
+            label.setAttribute('y', y + h / 2 - 1);
+            label.setAttribute('text-anchor', 'middle');
+            label.textContent = name;
+            svg.appendChild(label);
 
-        const name = item.bp.piece.name || `${item.bp.piece.length}"×${item.bp.piece.width}"`;
-        const color = colorMap.get(name) || '#ccc';
-
-        // Piece rectangle
-        const rect = document.createElementNS(SVG_NS, 'rect');
-        rect.setAttribute('class', 'piece-rect');
-        rect.setAttribute('x', x);
-        rect.setAttribute('y', y);
-        rect.setAttribute('width', w);
-        rect.setAttribute('height', h);
-        rect.setAttribute('fill', color);
-        rect.setAttribute('data-assign-idx', item.assignIdx);
-        svg.appendChild(rect);
-
-        // Labels
-        if (w > 35 && h > 18) {
-          const glueLabel = item.stripNum > 0 ? ` (strip ${item.stripNum} of ${item.bp.glueUp.stripCount})` : '';
-          const labelStr = name + glueLabel;
-
-          const label = document.createElementNS(SVG_NS, 'text');
-          label.setAttribute('class', 'piece-label');
-          label.setAttribute('x', x + w / 2);
-          label.setAttribute('y', y + h / 2 - 2);
-          label.setAttribute('text-anchor', 'middle');
-          label.setAttribute('dominant-baseline', 'auto');
-          label.textContent = labelStr.length > w / 6.5 ? name : labelStr;
-          svg.appendChild(label);
-
-          const dimW = item.bp.rotated ? item.bp.piece.length : item.bp.piece.width;
-          const dimL = item.bp.rotated ? item.bp.piece.width : item.bp.piece.length;
-          const dim = document.createElementNS(SVG_NS, 'text');
-          dim.setAttribute('class', 'piece-dim');
-          dim.setAttribute('x', x + w / 2);
-          dim.setAttribute('y', y + h / 2 + 10);
-          dim.setAttribute('text-anchor', 'middle');
-          dim.textContent = `${dimL}" × ${dimW}"`;
-          svg.appendChild(dim);
-        }
-
-        // Tooltip + interaction
-        const makeTooltipText = () => {
-          const dimW = item.bp.rotated ? item.bp.piece.length : item.bp.piece.width;
-          const dimL = item.bp.rotated ? item.bp.piece.width : item.bp.piece.length;
-          let info = `${name}: ${dimL}" × ${dimW}"`;
-          if (item.bp.rotated) info += ' (rotated)';
-          if (item.stripNum > 0) info += ` — glue-up strip ${item.stripNum} of ${item.bp.glueUp.stripCount}`;
-          return info;
-        };
-
-        const showTip = () => {
-          tooltip.textContent = makeTooltipText();
-          tooltip.style.display = 'block';
-          const svgRect = svg.getBoundingClientRect();
-          const containerRect = container.getBoundingClientRect();
-          const tipW = tooltip.offsetWidth;
-          let left = svgRect.left - containerRect.left + parseFloat(rect.getAttribute('x')) + w / 2 - tipW / 2;
-          left = Math.max(0, Math.min(left, containerRect.width - tipW));
-          tooltip.style.left = left + 'px';
-          tooltip.style.top = (svgRect.top - containerRect.top + parseFloat(rect.getAttribute('y')) - tooltip.offsetHeight - 8) + 'px';
-          highlightAssignRow(assignList, item.assignIdx, true);
-        };
-
-        const hideTip = () => {
-          tooltip.style.display = 'none';
-          highlightAssignRow(assignList, item.assignIdx, false);
-        };
-
-        rect.addEventListener('mouseenter', showTip);
-        rect.addEventListener('mouseleave', hideTip);
-        rect.addEventListener('click', (e) => {
-          e.stopPropagation();
-          if (rect.classList.contains('highlighted')) {
-            rect.classList.remove('highlighted');
-            hideTip();
-          } else {
-            svg.querySelectorAll('.piece-rect.highlighted').forEach(r => r.classList.remove('highlighted'));
-            rect.classList.add('highlighted');
-            showTip();
-            const li = assignList?.children[item.assignIdx];
-            if (li) li.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            const dim = document.createElementNS(SVG_NS, 'text');
+            dim.setAttribute('class', 'piece-dim');
+            dim.setAttribute('x', x + w / 2);
+            dim.setAttribute('y', y + h / 2 + 10);
+            dim.setAttribute('text-anchor', 'middle');
+            dim.textContent = `${Math.round(item.length * 10) / 10}" × ${Math.round(item.width * 10) / 10}"`;
+            svg.appendChild(dim);
           }
-        });
 
-        xOffset += item.sec.length;
+          // Tooltip
+          const showTip = () => {
+            tooltip.textContent = `${name}: ${item.length}" × ${item.width}"`;
+            tooltip.style.display = 'block';
+            const svgRect = svg.getBoundingClientRect();
+            const containerRect = container.getBoundingClientRect();
+            tooltip.style.left = (svgRect.left - containerRect.left + parseFloat(rect.getAttribute('x')) + w / 2 - tooltip.offsetWidth / 2) + 'px';
+            tooltip.style.top = (svgRect.top - containerRect.top + parseFloat(rect.getAttribute('y')) - tooltip.offsetHeight - 8) + 'px';
+          };
+          const hideTip = () => { tooltip.style.display = 'none'; };
+          rect.addEventListener('mouseenter', showTip);
+          rect.addEventListener('mouseleave', hideTip);
+          rect.addEventListener('click', (e) => {
+            e.stopPropagation();
+            svg.querySelectorAll('.piece-rect.highlighted').forEach(r => r.classList.remove('highlighted'));
+            rect.classList.toggle('highlighted');
+            if (rect.classList.contains('highlighted')) showTip(); else hideTip();
+          });
+
+          xOffset += item.length;
+        }
+        yOffset += col.width;
       }
-
-      yOffset += colWidth;
     }
+
+    // Advance global assign index
+    globalAssignIdx += board.pieces.length;
 
     svgWrapper.appendChild(svg);
     wrapper.appendChild(svgWrapper);
     container.appendChild(wrapper);
   }
 
-  // Dismiss on outside click
+  // Dismiss
   document.addEventListener('click', () => {
     tooltip.style.display = 'none';
     container.querySelectorAll('.piece-rect.highlighted').forEach(r => r.classList.remove('highlighted'));
-    if (assignList) assignList.querySelectorAll('.assign-highlighted').forEach(li => li.classList.remove('assign-highlighted'));
   });
 }
 

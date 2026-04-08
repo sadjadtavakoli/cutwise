@@ -110,14 +110,17 @@ function generatePatterns(stockItem, itemTypes, constraints) {
   for (const t of compatible) widthSet.add(t.width);
   const colWidths = [...widthSet].sort((a, b) => a - b);
 
-  function addPattern(typeCounts) {
-    // typeCounts: Map<typeIdx, count>
+  function addPattern(typeCounts, columns) {
     const entries = [...typeCounts.entries()].filter(([, c]) => c > 0);
     if (entries.length === 0) return;
     const key = entries.map(([ti, c]) => `${ti}:${c}`).sort().join('|');
     if (seenKeys.has(key)) return;
     seenKeys.add(key);
-    patterns.push({ stock: stockItem, typeCounts: new Map(entries), cost: stockCost(stockItem) });
+    // Save column layout for diagram rendering
+    const layout = columns ? columns
+      .filter(c => c.items && c.items.length > 0)
+      .map(c => ({ width: c.width, items: [...c.items] })) : [];
+    patterns.push({ stock: stockItem, typeCounts: new Map(entries), cost: stockCost(stockItem), layout });
   }
 
   /**
@@ -128,19 +131,21 @@ function generatePatterns(stockItem, itemTypes, constraints) {
     const sorted = [...types].sort(sortFn);
     const counts = new Map();
 
+    // Track layout: which items go in which column
+    for (const col of columns) {
+      if (!col.items) col.items = [];
+    }
+
     for (const t of sorted) {
       const currentCount = counts.get(t.typeIdx) || 0;
-      if (currentCount >= t.demand) continue; // already have enough of this type
+      if (currentCount >= t.demand) continue;
 
-      // Try to place as many of this type as possible
       for (const col of columns) {
         if (col.width < t.width - 0.001) continue;
-        const waste = col.width - t.width;
-        // Only use this column if it's a good width match (waste < 50% of item width)
-        // unless it's the only option
         while (col.remaining >= t.length - 0.001 && (counts.get(t.typeIdx) || 0) < t.demand) {
           col.remaining -= t.length;
           counts.set(t.typeIdx, (counts.get(t.typeIdx) || 0) + 1);
+          col.items.push({ typeIdx: t.typeIdx, width: t.width, length: t.length, name: t.name });
         }
       }
     }
@@ -162,7 +167,7 @@ function generatePatterns(stockItem, itemTypes, constraints) {
 
     for (const sortFn of SORTS) {
       const cols = Array.from({ length: numCols }, () => ({ width: cw, remaining: boardL }));
-      addPattern(packColumns(cols, compatible, sortFn));
+      { const tc = packColumns(cols, compatible, sortFn); addPattern(tc, cols); }
     }
   }
 
@@ -181,7 +186,7 @@ function generatePatterns(stockItem, itemTypes, constraints) {
           { width: w1, remaining: boardL },
           ...Array.from({ length: n2 }, () => ({ width: w2, remaining: boardL })),
         ];
-        addPattern(packColumns(cols, compatible, sortFn));
+        { const tc = packColumns(cols, compatible, sortFn); addPattern(tc, cols); }
       }
 
       // Also try n1=n2's width, n2=w1 (reversed counts)
@@ -194,7 +199,7 @@ function generatePatterns(stockItem, itemTypes, constraints) {
               { width: w2, remaining: boardL },
               ...Array.from({ length: n1r }, () => ({ width: w1, remaining: boardL })),
             ];
-            addPattern(packColumns(cols, compatible, sortFn));
+            { const tc = packColumns(cols, compatible, sortFn); addPattern(tc, cols); }
           }
         }
       }
@@ -210,8 +215,17 @@ function generatePatterns(stockItem, itemTypes, constraints) {
       const remainLen = boardL - count * wideType.length;
       if (remainLen < 1) {
         const tc = new Map([[wideType.typeIdx, count]]);
-        addPattern(tc);
+        const wideCol = { width: boardW, items: [] };
+        for (let c = 0; c < count; c++) wideCol.items.push({ typeIdx: wideType.typeIdx, width: wideType.width, length: wideType.length, name: wideType.name });
+        addPattern(tc, [wideCol]);
         continue;
+      }
+
+      // Build a "crosscut column" for the wide items (full board width)
+      function makeWideCol() {
+        const col = { width: boardW, items: [] };
+        for (let c = 0; c < count; c++) col.items.push({ typeIdx: wideType.typeIdx, width: wideType.width, length: wideType.length, name: wideType.name });
+        return col;
       }
 
       // Rip remaining area for narrower items
@@ -225,7 +239,7 @@ function generatePatterns(stockItem, itemTypes, constraints) {
           const cols = Array.from({ length: numCols }, () => ({ width: cw, remaining: remainLen }));
           const tc = packColumns(cols, narrowTypes, sortFn);
           tc.set(wideType.typeIdx, (tc.get(wideType.typeIdx) || 0) + count);
-          addPattern(tc);
+          addPattern(tc, [makeWideCol(), ...cols]);
         }
       }
 
@@ -245,7 +259,7 @@ function generatePatterns(stockItem, itemTypes, constraints) {
             ];
             const tc = packColumns(cols, narrowTypes, sortFn);
             tc.set(wideType.typeIdx, (tc.get(wideType.typeIdx) || 0) + count);
-            addPattern(tc);
+            addPattern(tc, [makeWideCol(), ...cols]);
           }
         }
       }
@@ -258,15 +272,16 @@ function generatePatterns(stockItem, itemTypes, constraints) {
       if (cw < t.width - 0.001) continue;
       const numCols = Math.floor((boardW + kerfWidth) / (cw + kerfWidth));
       if (numCols <= 0) continue;
-      const cols = Array.from({ length: numCols }, () => ({ width: cw, remaining: boardL }));
+      const cols = Array.from({ length: numCols }, () => ({ width: cw, remaining: boardL, items: [] }));
       const tc = new Map();
       for (const col of cols) {
         while (col.remaining >= t.length - 0.001 && (tc.get(t.typeIdx) || 0) < t.demand) {
           col.remaining -= t.length;
           tc.set(t.typeIdx, (tc.get(t.typeIdx) || 0) + 1);
+          col.items.push({ typeIdx: t.typeIdx, width: t.width, length: t.length, name: t.name });
         }
       }
-      addPattern(tc);
+      addPattern(tc, cols);
     }
   }
 
@@ -357,7 +372,7 @@ function formatSolution(solution, itemTypes, expandedPieces, strategyName) {
     if (purchaseMap.has(key)) purchaseMap.get(key).quantity += 1;
     else purchaseMap.set(key, { stock: pat.stock, quantity: 1 });
 
-    const boardEntry = { stock: pat.stock, pieces: [] };
+    const boardEntry = { stock: pat.stock, pieces: [], layout: pat.layout || [] };
 
     for (const [ti, count] of pat.typeCounts) {
       const type = itemTypes[ti];

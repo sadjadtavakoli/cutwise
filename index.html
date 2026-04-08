@@ -10,6 +10,11 @@
   <header>
     <h1>CutWise</h1>
     <p class="subtitle">Optimize lumber purchases by price</p>
+    <div id="user-indicator" hidden>
+      <img id="user-avatar" alt="" width="24" height="24">
+      <span id="user-name"></span>
+      <a href="#" id="btn-sign-out">Sign out</a>
+    </div>
   </header>
 
   <main>
@@ -118,10 +123,25 @@
     </section>
   </main>
 
+  <!-- Sign-in Modal -->
+  <div id="sign-in-modal" class="modal-overlay" hidden>
+    <div class="modal-card">
+      <h3>Sign in to CutWise</h3>
+      <p>Save your projects and access them from any device.</p>
+      <button id="btn-google-sign-in" class="btn-google">
+        Sign in with Google
+      </button>
+      <a href="#" id="btn-modal-cancel" class="modal-cancel">Cancel</a>
+    </div>
+  </div>
+
   <script type="importmap">
     {
       "imports": {
-        "javascript-lp-solver": "https://cdn.jsdelivr.net/npm/javascript-lp-solver@1.0.3/dist/index.browser.mjs"
+        "javascript-lp-solver": "https://cdn.jsdelivr.net/npm/javascript-lp-solver@1.0.3/dist/index.browser.mjs",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js",
+        "firebase/auth": "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js"
       }
     }
   </script>

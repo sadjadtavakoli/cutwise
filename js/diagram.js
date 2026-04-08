@@ -7,9 +7,11 @@ const COLORS = [
 
 /**
  * Render cut diagrams for a solution's boards.
- * @param {HTMLElement} container - DOM element to render into
- * @param {Array} boards - result.boards from optimizer
- * @param {HTMLElement} assignList - the <ul> of cut assignments for interaction
+ *
+ * Layout model matches the optimizer: boards are ripped into columns,
+ * each column is independently crosscut for pieces.
+ * - Y-axis (vertical) = board width, divided into columns by rip cuts
+ * - X-axis (horizontal) = board length, pieces crosscut within each column
  */
 export function renderDiagrams(container, boards, assignList) {
   container.innerHTML = '';
@@ -44,7 +46,6 @@ export function renderDiagrams(container, boards, assignList) {
   container.style.position = 'relative';
   container.appendChild(tooltip);
 
-  // Track global assignment index across boards
   let globalAssignIdx = 0;
 
   for (let boardIdx = 0; boardIdx < boards.length; boardIdx++) {
@@ -98,62 +99,49 @@ export function renderDiagrams(container, boards, assignList) {
     boardRect.setAttribute('stroke-width', '1');
     svg.appendChild(boardRect);
 
-    // Layout pieces into rows
-    // Group sections by height (section.length), pack within each row by width
+    // Collect all sections with their parent info
     const allSections = [];
-    const startAssignIdx = globalAssignIdx;
-
     for (const bp of board.pieces) {
       const assignIdx = globalAssignIdx;
       if (bp.glueUp && bp.sections.length > 1) {
         for (let i = 0; i < bp.sections.length; i++) {
-          allSections.push({
-            sec: bp.sections[i],
-            bp,
-            stripNum: i + 1,
-            assignIdx,
-          });
+          allSections.push({ sec: bp.sections[i], bp, stripNum: i + 1, assignIdx });
         }
       } else {
-        allSections.push({
-          sec: bp.sections[0],
-          bp,
-          stripNum: 0,
-          assignIdx,
-        });
+        for (const sec of bp.sections) {
+          allSections.push({ sec, bp, stripNum: bp.glueUp ? 1 : 0, assignIdx });
+        }
       }
       globalAssignIdx++;
     }
 
-    // Group by row height
-    const byHeight = new Map();
+    // Layout: group sections into columns by width, then pack along length (x-axis).
+    // Columns stack along width (y-axis).
+    const byWidth = new Map();
     for (const item of allSections) {
-      const key = Math.round(item.sec.length * 1000);
-      if (!byHeight.has(key)) byHeight.set(key, []);
-      byHeight.get(key).push(item);
+      const key = Math.round(item.sec.width * 1000);
+      if (!byWidth.has(key)) byWidth.set(key, []);
+      byWidth.get(key).push(item);
     }
 
-    // Stack rows along length (x-axis), pieces within row along width (y-axis).
-    // When pieces overflow the board width, wrap into a new column (advance x).
-    let xOffset = 0;
-    for (const [heightKey, items] of byHeight) {
-      const rowLen = heightKey / 1000; // section.length = column width along x
-      let yOffset = 0;
-      let colStartX = xOffset;
+    // Sort columns: widest first (they visually anchor the diagram)
+    const sortedWidths = [...byWidth.keys()].sort((a, b) => b - a);
 
+    let yOffset = 0; // tracks vertical position (board width axis)
+    for (const widthKey of sortedWidths) {
+      const colWidth = widthKey / 1000;
+      const items = byWidth.get(widthKey);
+
+      // Pack items into this column along the x-axis (board length)
+      let xOffset = 0;
       for (const item of items) {
-        const secWidth = item.sec.width; // width along y-axis
-
-        // Wrap to next column if this piece would overflow board width
-        if (yOffset + secWidth > boardW + 0.01) {
-          xOffset += rowLen;
-          yOffset = 0;
-        }
-
         const x = PADDING + xOffset * scale;
         const y = PADDING + yOffset * scale;
-        const w = rowLen * scale;
-        const h = secWidth * scale;
+        const w = item.sec.length * scale;
+        const h = colWidth * scale;
+
+        // Clip to board bounds
+        if (xOffset + item.sec.length > boardL + 0.01) break;
 
         const name = item.bp.piece.name || `${item.bp.piece.length}"×${item.bp.piece.width}"`;
         const color = colorMap.get(name) || '#ccc';
@@ -169,7 +157,7 @@ export function renderDiagrams(container, boards, assignList) {
         rect.setAttribute('data-assign-idx', item.assignIdx);
         svg.appendChild(rect);
 
-        // Labels (only if piece is large enough)
+        // Labels
         if (w > 35 && h > 18) {
           const glueLabel = item.stripNum > 0 ? ` (strip ${item.stripNum} of ${item.bp.glueUp.stripCount})` : '';
           const labelStr = name + glueLabel;
@@ -194,7 +182,7 @@ export function renderDiagrams(container, boards, assignList) {
           svg.appendChild(dim);
         }
 
-        // Tooltip + highlight interaction
+        // Tooltip + interaction
         const makeTooltipText = () => {
           const dimW = item.bp.rotated ? item.bp.piece.length : item.bp.piece.width;
           const dimL = item.bp.rotated ? item.bp.piece.width : item.bp.piece.length;
@@ -238,9 +226,10 @@ export function renderDiagrams(container, boards, assignList) {
           }
         });
 
-        yOffset += secWidth;
+        xOffset += item.sec.length;
       }
-      xOffset += rowLen;
+
+      yOffset += colWidth;
     }
 
     svgWrapper.appendChild(svg);
@@ -263,9 +252,6 @@ function highlightAssignRow(assignList, index, highlight) {
   li.classList.toggle('assign-highlighted', highlight);
 }
 
-/**
- * Wire reverse: hover assignment row → highlight diagram piece.
- */
 export function wireAssignListHover(assignList, diagramContainer) {
   if (!assignList || !diagramContainer) return;
   const items = assignList.querySelectorAll('li');
